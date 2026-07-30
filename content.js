@@ -111,7 +111,11 @@
 
   function shouldBlock(session, allowlist, url) {
     if (!session) return false;
-    return L.isBlockableUrl(url) && L.isBlockingActive(session) && !L.isUrlAllowed(url, allowlist);
+    return (
+      L.isBlockableUrl(url) &&
+      L.isBlockingActive(session) &&
+      !L.isUrlAllowed(url, allowlist, session.tagScope)
+    );
   }
 
   /* The single decision point. Everything else just calls this. */

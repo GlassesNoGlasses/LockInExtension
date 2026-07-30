@@ -24,12 +24,35 @@ const MIN_DURATION_MS = 60 * 1000; // 1 minute
 const MAX_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours
 const ALARM_TIMER_END = "lockin-timer-end";
 
+// --- Tags ------------------------------------------------------------------
+
+/**
+ * Tags an allowlist entry can carry. An entry with no tag (`null`, or the
+ * field missing entirely on entries written before tags existed) is "white":
+ * it counts in every session.
+ */
+const TAGS = Object.freeze(["red", "green", "blue"]);
+
+/** Scopes a session can run under. "white" is the untagged, default scope. */
+const TAG_SCOPES = Object.freeze(["white", "red", "green", "blue"]);
+
+/** A usable tag, or null for absent/unknown ones. */
+function normalizeTag(tag) {
+  return TAGS.indexOf(tag) === -1 ? null : tag;
+}
+
+/** A usable scope, defaulting to "white". */
+function normalizeTagScope(tagScope) {
+  return TAG_SCOPES.indexOf(tagScope) === -1 ? "white" : tagScope;
+}
+
 const IDLE_SESSION = Object.freeze({
   status: "idle",
   mode: null,
   startedAt: null,
   accumulatedMs: 0,
   durationMs: null,
+  tagScope: null,
 });
 
 const DEFAULT_PORTS = { "http:": "80", "https:": "443" };
@@ -161,17 +184,25 @@ const BUILTIN_DOMAINS = Object.freeze(["google.com"]);
  * True when `raw` is permitted by a built-in domain or the allowlist.
  * Non-http(s) URLs are never "allowed" — callers gate on isBlockableUrl()
  * first.
+ *
+ * `tagScope` is the running session's scope (default/invalid -> "white"). An
+ * entry only counts when it is untagged or carries exactly that tag, so a
+ * "red" session sees red + untagged entries and a "white" session sees only
+ * untagged ones. Built-in domains ignore the scope entirely. An entry with an
+ * unrecognizable tag counts in no scope at all (fail closed).
  */
-function isUrlAllowed(raw, allowlist) {
+function isUrlAllowed(raw, allowlist, tagScope) {
   const parsed = parseUrl(raw);
   if (!parsed) return false;
   for (const domain of BUILTIN_DOMAINS) {
     if (hostMatchesDomain(parsed.host, domain)) return true;
   }
   if (!Array.isArray(allowlist)) return false;
+  const scope = normalizeTagScope(tagScope);
 
   for (const entry of allowlist) {
     if (!entry || typeof entry !== "object") continue;
+    if (entry.tag != null && entry.tag !== scope) continue;
     if (entry.type === "domain") {
       if (hostMatchesDomain(parsed.host, entry.value)) return true;
     } else if (entry.type === "url") {
@@ -220,7 +251,8 @@ function asList(allowlist) {
 }
 
 /**
- * Build a normalized Entry. @returns {{entry:object|null, error:string|null}}
+ * Build a normalized Entry. New entries are always untagged; tags are applied
+ * later via updateEntry. @returns {{entry:object|null, error:string|null}}
  */
 function makeEntry(type, rawValue, now, id) {
   const value = normalizeEntryValue(type, rawValue);
@@ -232,6 +264,7 @@ function makeEntry(type, rawValue, now, id) {
       type,
       value,
       createdAt: typeof now === "number" && isFinite(now) ? now : 0,
+      tag: null,
     },
     error: null,
   };
@@ -263,12 +296,22 @@ function addEntry(allowlist, type, rawValue, now, id) {
 }
 
 /**
+ * `tag` is optional: omit it (undefined) to keep the entry's current tag, pass
+ * null to clear it, or pass a member of TAGS to set it. Anything else is an
+ * INVALID_VALUE, checked before the value so the tag can never be half-applied.
  * @returns {{allowlist:object[], entry:object|null, error:string|null}}
  */
-function updateEntry(allowlist, id, type, rawValue, now) {
+function updateEntry(allowlist, id, type, rawValue, now, tag) {
   const list = asList(allowlist);
   const index = list.findIndex((e) => e && e.id === id);
   if (index === -1) return { allowlist: list, entry: null, error: "NOT_FOUND" };
+
+  const previous = list[index];
+  let nextTag;
+  if (tag === undefined) nextTag = normalizeTag(previous.tag);
+  else if (tag === null) nextTag = null;
+  else if (TAGS.indexOf(tag) !== -1) nextTag = tag;
+  else return { allowlist: list, entry: null, error: "INVALID_VALUE" };
 
   const value = normalizeEntryValue(type, rawValue);
   if (!value) return { allowlist: list, entry: null, error: "INVALID_VALUE" };
@@ -279,12 +322,12 @@ function updateEntry(allowlist, id, type, rawValue, now) {
     return { allowlist: list, entry: null, error: "DUPLICATE" };
   }
 
-  const previous = list[index];
   const entry = {
     id: previous.id,
     type,
     value,
     createdAt: typeof previous.createdAt === "number" ? previous.createdAt : now,
+    tag: nextTag,
   };
   const next = list.slice();
   next[index] = entry;
@@ -315,6 +358,37 @@ function sortAllowlist(allowlist) {
     });
 }
 
+/**
+ * Display-only filtering for the popup list. `filters` is
+ * `{query, type, tag}`; every field is optional and anything unusable is
+ * simply ignored, so junk narrows nothing. All usable filters apply together.
+ *
+ * Note the asymmetry with session scopes: filtering by tag shows ONLY entries
+ * carrying that exact tag, whereas a session scope also admits untagged ones.
+ *
+ * Never mutates; always returns a new array.
+ */
+function filterEntries(allowlist, filters) {
+  const list = asList(allowlist);
+  const f = filters && typeof filters === "object" ? filters : {};
+
+  const query = typeof f.query === "string" ? f.query.trim().toLowerCase() : "";
+  const type = f.type === "domain" || f.type === "url" ? f.type : null;
+  const tag = normalizeTag(f.tag);
+  if (!query && !type && !tag) return list.slice();
+
+  return list.filter((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    if (type && entry.type !== type) return false;
+    if (tag && entry.tag !== tag) return false;
+    if (query) {
+      const value = typeof entry.value === "string" ? entry.value.toLowerCase() : "";
+      if (value.indexOf(query) === -1) return false;
+    }
+    return true;
+  });
+}
+
 // --- Session transitions ---------------------------------------------------
 
 const VALID_REASONS = ["manual", "timer_expired", "all_tabs_closed", "browser_restart"];
@@ -331,6 +405,7 @@ function idleSession() {
     startedAt: null,
     accumulatedMs: 0,
     durationMs: null,
+    tagScope: null,
   };
 }
 
@@ -398,8 +473,12 @@ function isBlockingActive(session) {
   return !!session && typeof session === "object" && session.status === "active";
 }
 
-/** idle -> active. @returns {{session:object, error:string|null}} */
-function startSession(session, now, mode, durationMs) {
+/**
+ * idle -> active. An unusable `tagScope` falls back to "white" rather than
+ * failing the start.
+ * @returns {{session:object, error:string|null}}
+ */
+function startSession(session, now, mode, durationMs, tagScope) {
   const s = coerceSession(session);
   if (s.status !== "idle") return { session: s, error: "ILLEGAL_TRANSITION" };
   if (mode !== "stopwatch" && mode !== "timer") return { session: s, error: "INVALID_VALUE" };
@@ -413,6 +492,7 @@ function startSession(session, now, mode, durationMs) {
       startedAt: num(now, 0),
       accumulatedMs: 0,
       durationMs: mode === "timer" ? durationMs : null,
+      tagScope: normalizeTagScope(tagScope),
     },
     error: null,
   };
@@ -429,6 +509,7 @@ function pauseSession(session, now) {
       startedAt: null,
       accumulatedMs: elapsedMs(s, now),
       durationMs: num(s.durationMs, null),
+      tagScope: normalizeTagScope(s.tagScope),
     },
     error: null,
   };
@@ -445,6 +526,7 @@ function resumeSession(session, now) {
       startedAt: num(now, 0),
       accumulatedMs: Math.max(0, num(s.accumulatedMs, 0)),
       durationMs: num(s.durationMs, null),
+      tagScope: normalizeTagScope(s.tagScope),
     },
     error: null,
   };
@@ -467,6 +549,8 @@ function stopSession(session, now, reason) {
       elapsedMs: elapsedMs(s, now),
       endedAt: num(now, 0),
       reason: finalReason,
+      // Flipped by the service worker once the user has seen the DONE badge.
+      acknowledged: false,
     },
     error: null,
   };
@@ -543,6 +627,8 @@ const LockInLib = {
   MAX_DURATION_MS,
   ALARM_TIMER_END,
   IDLE_SESSION,
+  TAGS,
+  TAG_SCOPES,
   BUILTIN_DOMAINS,
   normalizeHost,
   parseUrl,
@@ -556,6 +642,7 @@ const LockInLib = {
   updateEntry,
   deleteEntry,
   sortAllowlist,
+  filterEntries,
   idleSession,
   startSession,
   pauseSession,

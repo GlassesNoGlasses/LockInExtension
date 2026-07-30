@@ -241,7 +241,9 @@ test("isUrlAllowed is total for junk allowlists", () => {
 test("makeEntry normalizes the value and stamps id/createdAt", () => {
   const r = lib.makeEntry("domain", "  WWW.YouTube.com  ", 1000, "id-1");
   assert.equal(r.error, null);
-  assert.deepEqual(r.entry, { id: "id-1", type: "domain", value: "youtube.com", createdAt: 1000 });
+  assert.deepEqual(r.entry, {
+    id: "id-1", type: "domain", value: "youtube.com", createdAt: 1000, tag: null,
+  });
 
   const u = lib.makeEntry("url", "youtube.com/watch?v=1", 5, "id-2");
   assert.equal(u.error, null);
@@ -336,6 +338,7 @@ test("updateEntry replaces value and type, preserving id and createdAt", () => {
     type: "url",
     value: "https://reddit.com/r/x",
     createdAt: 100,
+    tag: null,
   });
   assert.equal(list[0].value, "youtube.com"); // input untouched
 });
@@ -436,7 +439,11 @@ test("parseDuration rejects non-numeric, fractional and negative input", () => {
 // Group 7 — session transitions
 // ---------------------------------------------------------------------------
 
-const idle = () => ({ status: "idle", mode: null, startedAt: null, accumulatedMs: 0, durationMs: null });
+const idle = () => ({
+  status: "idle", mode: null, startedAt: null, accumulatedMs: 0, durationMs: null, tagScope: null,
+});
+// The active/paused helpers deliberately omit `tagScope` — they stand in for
+// sessions written by an older version of the extension.
 const activeStopwatch = (startedAt, accumulatedMs) => ({
   status: "active", mode: "stopwatch", startedAt, accumulatedMs: accumulatedMs || 0, durationMs: null,
 });
@@ -463,6 +470,7 @@ test("startSession starts a stopwatch from idle", () => {
   assert.equal(r.error, null);
   assert.deepEqual(r.session, {
     status: "active", mode: "stopwatch", startedAt: 1000, accumulatedMs: 0, durationMs: null,
+    tagScope: "white",
   });
 });
 
@@ -471,6 +479,7 @@ test("startSession starts a timer from idle", () => {
   assert.equal(r.error, null);
   assert.deepEqual(r.session, {
     status: "active", mode: "timer", startedAt: 1000, accumulatedMs: 0, durationMs: 1800000,
+    tagScope: "white",
   });
 });
 
@@ -510,6 +519,7 @@ test("pauseSession banks the elapsed leg", () => {
   assert.equal(r.error, null);
   assert.deepEqual(r.session, {
     status: "paused", mode: "stopwatch", startedAt: null, accumulatedMs: 8000, durationMs: null,
+    tagScope: "white",
   });
 });
 
@@ -528,6 +538,7 @@ test("resumeSession opens a new leg from paused", () => {
   assert.equal(r.error, null);
   assert.deepEqual(r.session, {
     status: "active", mode: "timer", startedAt: 50000, accumulatedMs: 8000, durationMs: 600000,
+    tagScope: "white",
   });
 });
 
@@ -545,7 +556,7 @@ test("stopSession finalizes an active session", () => {
   assert.equal(r.error, null);
   assert.deepEqual(r.session, idle());
   assert.deepEqual(r.lastSession, {
-    mode: "timer", elapsedMs: 6000, endedAt: 5000, reason: "timer_expired",
+    mode: "timer", elapsedMs: 6000, endedAt: 5000, reason: "timer_expired", acknowledged: false,
   });
 });
 
@@ -554,7 +565,7 @@ test("stopSession finalizes a paused session at its banked time", () => {
   assert.equal(r.error, null);
   assert.deepEqual(r.session, idle());
   assert.deepEqual(r.lastSession, {
-    mode: "stopwatch", elapsedMs: 9000, endedAt: 99999, reason: "manual",
+    mode: "stopwatch", elapsedMs: 9000, endedAt: 99999, reason: "manual", acknowledged: false,
   });
 });
 
@@ -723,6 +734,292 @@ test("formatShort is total and clamps at zero", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Group 10 — tags: constants, entry.tag, updateEntry(tag), isUrlAllowed(scope)
+// ---------------------------------------------------------------------------
+
+/** A tagged entry. `E()` deliberately produces entries with NO tag field. */
+const T = (type, value, tag, id) => Object.assign(E(type, value, id), { tag });
+
+test("TAGS and TAG_SCOPES are the frozen tag vocabulary", () => {
+  assert.deepEqual(lib.TAGS, ["red", "green", "blue"]);
+  assert.deepEqual(lib.TAG_SCOPES, ["white", "red", "green", "blue"]);
+  assert.equal(Object.isFrozen(lib.TAGS), true);
+  assert.equal(Object.isFrozen(lib.TAG_SCOPES), true);
+});
+
+test("new entries are created untagged", () => {
+  assert.equal(lib.makeEntry("domain", "youtube.com", 1, "id-1").entry.tag, null);
+  assert.equal(lib.addEntry([], "url", "youtube.com/watch?v=1", 1, "id-2").allowlist[0].tag, null);
+});
+
+test("updateEntry preserves an existing tag while the value is edited", () => {
+  const list = [T("domain", "youtube.com", "red", "id-1")];
+  const r = lib.updateEntry(list, "id-1", "domain", "reddit.com", 2);
+  assert.equal(r.error, null);
+  assert.deepEqual(r.allowlist[0], {
+    id: "id-1", type: "domain", value: "reddit.com", createdAt: 0, tag: "red",
+  });
+});
+
+test("updateEntry rebuilds a legacy entry with tag null", () => {
+  const list = [E("domain", "youtube.com", "id-1")];
+  assert.equal("tag" in list[0], false);
+  const r = lib.updateEntry(list, "id-1", "domain", "reddit.com", 2);
+  assert.equal(r.error, null);
+  assert.equal(r.allowlist[0].tag, null);
+});
+
+test("updateEntry normalizes a junk stored tag to null when preserving", () => {
+  for (const junk of ["purple", "white", "RED", 42, {}, []]) {
+    const list = [T("domain", "youtube.com", junk, "id-1")];
+    const r = lib.updateEntry(list, "id-1", "domain", "youtube.com", 2);
+    assert.equal(r.error, null, "junk tag " + String(junk));
+    assert.equal(r.allowlist[0].tag, null, "junk tag " + String(junk));
+  }
+});
+
+test("updateEntry sets each valid tag", () => {
+  for (const tag of lib.TAGS) {
+    const list = [E("domain", "youtube.com", "id-1")];
+    const r = lib.updateEntry(list, "id-1", "domain", "youtube.com", 2, tag);
+    assert.equal(r.error, null);
+    assert.equal(r.allowlist[0].tag, tag);
+    assert.equal(list[0].tag, undefined); // input untouched
+  }
+});
+
+test("updateEntry clears a tag when passed null", () => {
+  const list = [T("domain", "youtube.com", "blue", "id-1")];
+  const r = lib.updateEntry(list, "id-1", "domain", "youtube.com", 2, null);
+  assert.equal(r.error, null);
+  assert.equal(r.allowlist[0].tag, null);
+  assert.equal(list[0].tag, "blue");
+});
+
+test("updateEntry rejects an invalid tag and leaves the list unchanged", () => {
+  const list = [T("domain", "youtube.com", "red", "id-1")];
+  for (const bad of ["purple", "white", "RED", "", 0, 42, {}, [], true, NaN]) {
+    const r = lib.updateEntry(list, "id-1", "domain", "reddit.com", 2, bad);
+    assert.equal(r.error, "INVALID_VALUE", "tag " + String(bad));
+    assert.equal(r.entry, null);
+    assert.deepEqual(r.allowlist, list);
+  }
+});
+
+test("updateEntry still reports NOT_FOUND before looking at the tag", () => {
+  const list = [T("domain", "youtube.com", "red", "id-1")];
+  assert.equal(lib.updateEntry(list, "nope", "domain", "x.com", 3, "purple").error, "NOT_FOUND");
+});
+
+test("isUrlAllowed defaults to the white scope and ignores junk scopes", () => {
+  const list = [E("domain", "youtube.com")];
+  for (const scope of [undefined, null, "purple", "WHITE", 42, {}, ""]) {
+    assert.equal(lib.isUrlAllowed("https://youtube.com/", list, scope), true, String(scope));
+  }
+  const red = [T("domain", "youtube.com", "red")];
+  for (const scope of [undefined, null, "purple", "WHITE", 42, {}, ""]) {
+    assert.equal(lib.isUrlAllowed("https://youtube.com/", red, scope), false, String(scope));
+  }
+});
+
+test("isUrlAllowed only admits a tagged entry under its own scope", () => {
+  const red = [T("domain", "youtube.com", "red")];
+  assert.equal(lib.isUrlAllowed("https://youtube.com/feed", red, "white"), false);
+  assert.equal(lib.isUrlAllowed("https://youtube.com/feed", red, "red"), true);
+  assert.equal(lib.isUrlAllowed("https://music.youtube.com/", red, "red"), true);
+  assert.equal(lib.isUrlAllowed("https://youtube.com/feed", red, "green"), false);
+  assert.equal(lib.isUrlAllowed("https://youtube.com/feed", red, "blue"), false);
+});
+
+test("isUrlAllowed admits untagged entries under every scope", () => {
+  for (const scope of lib.TAG_SCOPES) {
+    assert.equal(lib.isUrlAllowed("https://youtube.com/", [E("domain", "youtube.com")], scope), true, scope);
+    assert.equal(lib.isUrlAllowed("https://youtube.com/", [T("domain", "youtube.com", null)], scope), true, scope);
+    assert.equal(
+      lib.isUrlAllowed("https://youtube.com/", [T("domain", "youtube.com", undefined)], scope), true, scope
+    );
+  }
+});
+
+test("isUrlAllowed scopes url entries too", () => {
+  const list = [T("url", "https://docs.example.com/a?b=1", "green")];
+  assert.equal(lib.isUrlAllowed("https://docs.example.com/a?b=1", list, "white"), false);
+  assert.equal(lib.isUrlAllowed("https://docs.example.com/a?b=1", list, "green"), true);
+  assert.equal(lib.isUrlAllowed("https://docs.example.com/a?b=1#x", list, "green"), true);
+  assert.equal(lib.isUrlAllowed("https://docs.example.com/a?b=2", list, "green"), false);
+});
+
+test("isUrlAllowed ignores entries carrying an unusable tag", () => {
+  const junk = [T("domain", "youtube.com", "purple")];
+  for (const scope of lib.TAG_SCOPES) {
+    assert.equal(lib.isUrlAllowed("https://youtube.com/", junk, scope), false, scope);
+  }
+});
+
+test("built-in domains stay allowed in every scope", () => {
+  for (const scope of lib.TAG_SCOPES.concat(["purple", null, undefined])) {
+    assert.equal(lib.isUrlAllowed("https://mail.google.com/", [], scope), true, String(scope));
+    assert.equal(lib.isUrlAllowed("https://google.com/search?q=x", null, scope), true, String(scope));
+    assert.equal(lib.isUrlAllowed("https://google.com.evil.com/", [], scope), false, String(scope));
+  }
+});
+
+test("isUrlAllowed picks the matching entry out of a mixed-tag allowlist", () => {
+  const list = [
+    E("domain", "docs.example.com"),
+    T("domain", "youtube.com", "red"),
+    T("domain", "reddit.com", "green"),
+  ];
+  assert.equal(lib.isUrlAllowed("https://docs.example.com/x", list, "red"), true);
+  assert.equal(lib.isUrlAllowed("https://youtube.com/x", list, "red"), true);
+  assert.equal(lib.isUrlAllowed("https://reddit.com/x", list, "red"), false);
+  assert.equal(lib.isUrlAllowed("https://reddit.com/x", list, "green"), true);
+  assert.equal(lib.isUrlAllowed("https://youtube.com/x", list, "white"), false);
+});
+
+test("startSession records the tag scope", () => {
+  for (const scope of lib.TAG_SCOPES) {
+    const r = withoutMutating(idle(), (s) => lib.startSession(s, 1000, "stopwatch", null, scope));
+    assert.equal(r.error, null);
+    assert.equal(r.session.tagScope, scope);
+  }
+  assert.equal(lib.startSession(idle(), 1, "timer", 60000, "blue").session.tagScope, "blue");
+});
+
+test("startSession defaults a missing or invalid tag scope to white", () => {
+  for (const bad of [undefined, null, "purple", "WHITE", "", 42, {}, []]) {
+    const r = lib.startSession(idle(), 1000, "stopwatch", null, bad);
+    assert.equal(r.error, null, String(bad));
+    assert.equal(r.session.tagScope, "white", String(bad));
+  }
+});
+
+test("pauseSession and resumeSession preserve the tag scope", () => {
+  let s = lib.startSession(idle(), 1000, "stopwatch", null, "green").session;
+  assert.equal(s.tagScope, "green");
+  s = lib.pauseSession(s, 4000).session;
+  assert.equal(s.status, "paused");
+  assert.equal(s.tagScope, "green");
+  s = lib.resumeSession(s, 10000).session;
+  assert.equal(s.status, "active");
+  assert.equal(s.tagScope, "green");
+  assert.equal(lib.elapsedMs(s, 10000), 3000);
+});
+
+test("pauseSession and resumeSession default a missing tag scope to white", () => {
+  assert.equal(lib.pauseSession(activeStopwatch(1000), 2000).session.tagScope, "white");
+  assert.equal(lib.resumeSession(pausedStopwatch(2000), 3000).session.tagScope, "white");
+  const bad = Object.assign(activeStopwatch(1000), { tagScope: "purple" });
+  assert.equal(lib.pauseSession(bad, 2000).session.tagScope, "white");
+});
+
+test("idleSession and stopSession leave the tag scope null", () => {
+  assert.equal(lib.idleSession().tagScope, null);
+  const started = lib.startSession(idle(), 1000, "stopwatch", null, "red").session;
+  const done = lib.stopSession(started, 4000, "manual");
+  assert.equal(done.session.tagScope, null);
+  assert.deepEqual(done.session, idle());
+});
+
+test("stopSession records an unacknowledged last session", () => {
+  assert.equal(lib.stopSession(pausedStopwatch(1000), 2000, "timer_expired").lastSession.acknowledged, false);
+  assert.equal(lib.stopSession(activeStopwatch(0), 2000, "manual").lastSession.acknowledged, false);
+});
+
+// ---------------------------------------------------------------------------
+// Group 11 — filterEntries
+// ---------------------------------------------------------------------------
+
+const FIXTURE = () => [
+  E("domain", "youtube.com", "d1"),
+  T("domain", "reddit.com", "red", "d2"),
+  T("domain", "news.ycombinator.com", "blue", "d3"),
+  E("url", "https://youtube.com/watch?v=1", "u1"),
+  T("url", "https://docs.youtube.com/a", "red", "u2"),
+];
+
+const ids = (list) => list.map((e) => e.id);
+
+test("filterEntries returns an unfiltered copy when no filter applies", () => {
+  const list = FIXTURE();
+  for (const filters of [undefined, null, {}, "nope", 42, [], { query: "", type: "bogus", tag: "white" }]) {
+    const out = lib.filterEntries(list, filters);
+    assert.deepEqual(ids(out), ids(list), JSON.stringify(filters) || String(filters));
+    assert.notEqual(out, list);
+  }
+});
+
+test("filterEntries is total for junk allowlists", () => {
+  for (const junk of [null, undefined, "nope", 42, {}]) {
+    assert.deepEqual(lib.filterEntries(junk, { query: "x" }), []);
+    assert.deepEqual(lib.filterEntries(junk, null), []);
+  }
+});
+
+test("filterEntries matches the query case-insensitively and trims it", () => {
+  assert.deepEqual(ids(lib.filterEntries(FIXTURE(), { query: "YOUTUBE" })), ["d1", "u1", "u2"]);
+  assert.deepEqual(ids(lib.filterEntries(FIXTURE(), { query: "  Reddit  " })), ["d2"]);
+  // "youtube.com" is a substring of "docs.youtube.com" too — no anchoring.
+  assert.deepEqual(ids(lib.filterEntries(FIXTURE(), { query: "youtube.com" })), ["d1", "u1", "u2"]);
+  assert.deepEqual(ids(lib.filterEntries(FIXTURE(), { query: "watch" })), ["u1"]);
+  assert.deepEqual(ids(lib.filterEntries(FIXTURE(), { query: "nothing-here" })), []);
+});
+
+test("filterEntries ignores an unusable query", () => {
+  for (const query of ["", "   ", null, undefined, 42, {}]) {
+    assert.equal(lib.filterEntries(FIXTURE(), { query }).length, 5, String(query));
+  }
+});
+
+test("filterEntries filters by type", () => {
+  assert.deepEqual(ids(lib.filterEntries(FIXTURE(), { type: "domain" })), ["d1", "d2", "d3"]);
+  assert.deepEqual(ids(lib.filterEntries(FIXTURE(), { type: "url" })), ["u1", "u2"]);
+  for (const type of ["bogus", "", null, undefined, 42]) {
+    assert.equal(lib.filterEntries(FIXTURE(), { type }).length, 5, String(type));
+  }
+});
+
+test("filterEntries filters by tag and excludes untagged entries", () => {
+  assert.deepEqual(ids(lib.filterEntries(FIXTURE(), { tag: "red" })), ["d2", "u2"]);
+  assert.deepEqual(ids(lib.filterEntries(FIXTURE(), { tag: "blue" })), ["d3"]);
+  assert.deepEqual(ids(lib.filterEntries(FIXTURE(), { tag: "green" })), []);
+});
+
+test("filterEntries ignores an unusable tag filter", () => {
+  for (const tag of ["white", "purple", "RED", "", null, undefined, 42, {}]) {
+    assert.equal(lib.filterEntries(FIXTURE(), { tag }).length, 5, String(tag));
+  }
+});
+
+test("filterEntries combines query, type and tag with AND", () => {
+  assert.deepEqual(
+    ids(lib.filterEntries(FIXTURE(), { query: "youtube", type: "url", tag: "red" })),
+    ["u2"]
+  );
+  assert.deepEqual(
+    ids(lib.filterEntries(FIXTURE(), { query: "youtube", type: "url" })),
+    ["u1", "u2"]
+  );
+  assert.deepEqual(
+    ids(lib.filterEntries(FIXTURE(), { query: "youtube", type: "domain", tag: "red" })),
+    []
+  );
+  assert.deepEqual(
+    ids(lib.filterEntries(FIXTURE(), { query: "REDDIT", tag: "red" })),
+    ["d2"]
+  );
+});
+
+test("filterEntries never mutates its input and drops junk entries when filtering", () => {
+  const list = FIXTURE();
+  const before = JSON.parse(JSON.stringify(list));
+  const out = lib.filterEntries(list.concat([null, {}, "junk"]), { type: "domain" });
+  assert.deepEqual(ids(out), ["d1", "d2", "d3"]);
+  assert.deepEqual(list, before);
+  assert.equal(list.length, 5);
+});
+
+// ---------------------------------------------------------------------------
 // Hygiene — the invariants the rest of the extension relies on
 // ---------------------------------------------------------------------------
 
@@ -739,9 +1036,10 @@ test("lib.js exports the whole frozen API surface", () => {
   const expected = [
     "KEY_ALLOWLIST", "KEY_SESSION", "KEY_LAST", "KEY_HEARTBEAT",
     "MIN_DURATION_MS", "MAX_DURATION_MS", "ALARM_TIMER_END", "IDLE_SESSION",
+    "TAGS", "TAG_SCOPES",
     "normalizeHost", "parseUrl", "isBlockableUrl", "normalizeUrlEntry",
     "normalizeDomainEntry", "hostMatchesDomain", "isUrlAllowed",
-    "makeEntry", "addEntry", "updateEntry", "deleteEntry", "sortAllowlist",
+    "makeEntry", "addEntry", "updateEntry", "deleteEntry", "sortAllowlist", "filterEntries",
     "startSession", "pauseSession", "resumeSession", "stopSession",
     "elapsedMs", "remainingMs", "computeEndsAt", "isExpired", "isBlockingActive",
     "parseDuration", "formatClock", "formatShort",
@@ -750,7 +1048,7 @@ test("lib.js exports the whole frozen API surface", () => {
     assert.ok(name in lib, "missing export: " + name);
   }
   assert.deepEqual(lib.IDLE_SESSION, {
-    status: "idle", mode: null, startedAt: null, accumulatedMs: 0, durationMs: null,
+    status: "idle", mode: null, startedAt: null, accumulatedMs: 0, durationMs: null, tagScope: null,
   });
   assert.equal(lib.KEY_ALLOWLIST, "lockin.allowlist");
   assert.equal(lib.KEY_SESSION, "lockin.session");

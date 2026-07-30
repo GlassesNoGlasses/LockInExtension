@@ -10,6 +10,10 @@
   --accent: #ff5c3a;
   --green: #35d07f;
   --amber: #ffc24b;
+  --tag-white: #f2f2f6;
+  --tag-red: #ff5c5c;
+  --tag-green: var(--green);
+  --tag-blue: #4c8dff;
 }
 
 * {
@@ -364,8 +368,17 @@ body {
   min-width: 0;
 }
 
+.entry-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
 .entry-value {
   display: block;
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   font-size: 12px;
   text-overflow: ellipsis;
@@ -431,4 +444,188 @@ body {
   gap: 2px;
   justify-content: flex-end;
   margin-top: 6px;
+}
+
+/* --- tags, scope & filters --- */
+
+/* Round swatch button. The colour rides on --dot so one rule paints the
+   inner circle for every variant. */
+.dot {
+  position: relative;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.dot::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: var(--dot, transparent);
+  opacity: 0.6;
+  transition: opacity 0.12s ease;
+}
+
+.dot:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.dot:hover::after {
+  opacity: 0.9;
+}
+
+.dot:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.dot.is-on {
+  border-color: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.dot.is-on::after {
+  opacity: 1;
+}
+
+.dot--white {
+  --dot: var(--tag-white);
+}
+
+.dot--red {
+  --dot: var(--tag-red);
+}
+
+.dot--green {
+  --dot: var(--tag-green);
+}
+
+.dot--blue {
+  --dot: var(--tag-blue);
+}
+
+/* "No tag": a hollow ring instead of a filled circle. */
+.dot--none::after {
+  border: 1.5px solid var(--muted);
+  background: transparent;
+}
+
+.scope-row {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 0 2px;
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.filter-gap {
+  flex: 1 1 auto;
+}
+
+.chip {
+  flex: 0 0 auto;
+  min-height: 20px;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--faint);
+  font-family: inherit;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.chip:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+  color: var(--text);
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.chip.is-on {
+  border-color: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.18);
+  color: var(--text);
+}
+
+/* Scope colour carried on the Pause button while a session runs. */
+.btn-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-left: 7px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25);
+}
+
+.btn-dot--white {
+  background: var(--tag-white);
+}
+
+.btn-dot--red {
+  background: var(--tag-red);
+}
+
+.btn-dot--green {
+  background: var(--tag-green);
+}
+
+.btn-dot--blue {
+  background: var(--tag-blue);
+}
+
+.entry-dot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.entry-dot--red {
+  background: var(--tag-red);
+}
+
+.entry-dot--green {
+  background: var(--tag-green);
+}
+
+.entry-dot--blue {
+  background: var(--tag-blue);
+}
+
+.tag-picker {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.tag-picker-label {
+  margin-right: 1px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--faint);
 }

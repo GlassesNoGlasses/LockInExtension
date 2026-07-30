@@ -115,7 +115,9 @@ async function syncBadge() {
   let badge = null;
   if (session.status === "active") badge = BADGE.active;
   else if (session.status === "paused") badge = BADGE.paused;
-  else if (lastSession && lastSession.reason === "timer_expired") badge = BADGE.done;
+  else if (lastSession && lastSession.reason === "timer_expired" && !lastSession.acknowledged) {
+    badge = BADGE.done;
+  }
 
   try {
     if (!badge) {
@@ -127,6 +129,21 @@ async function syncBadge() {
   } catch (_e) {
     /* action API unavailable (e.g. during shutdown) */
   }
+}
+
+/**
+ * Marks the "timer finished" record as seen, which is what clears the DONE
+ * badge. Persisted (rather than just calling setBadgeText("")) so a later
+ * syncBadge() on a worker wake-up cannot resurrect a dismissed badge.
+ * No-op unless there is an unacknowledged expiry to acknowledge.
+ */
+function acknowledgeLastSession() {
+  return withWriteLock(async () => {
+    const { lastSession } = await readState();
+    if (!lastSession || lastSession.reason !== "timer_expired" || lastSession.acknowledged) return;
+    await writeState({ [L.KEY_LAST]: { ...lastSession, acknowledged: true } });
+    await syncBadge();
+  });
 }
 
 async function clearTimerAlarm() {
@@ -158,7 +175,7 @@ function notifyTimerDone(elapsed) {
         type: "basic",
         iconUrl: "hello_extensions.png",
         title: "Lock In — time's up",
-        message: "You stayed locked in for " + L.formatShort(elapsed) + ". Nice work.",
+        message: "Nice job twin, you stayed locked in for " + L.formatShort(elapsed),
         priority: 2,
         requireInteraction: true,
       })
@@ -188,11 +205,11 @@ async function finalize(session, endedAt, reason, notify) {
   return { ok: true, session: result.session, lastSession: result.lastSession };
 }
 
-function doStart(mode, durationMs) {
+function doStart(mode, durationMs, tagScope) {
   return withWriteLock(async () => {
     const now = Date.now();
     const { session } = await readState();
-    const result = L.startSession(session, now, mode, durationMs);
+    const result = L.startSession(session, now, mode, durationMs, tagScope);
     if (result.error) return { ok: false, error: result.error };
 
     await writeState({ [L.KEY_SESSION]: result.session, [L.KEY_LAST]: null });
@@ -270,11 +287,11 @@ function doAllow(entryType, url) {
   });
 }
 
-function doUpdateEntry(id, entryType, value) {
+function doUpdateEntry(id, entryType, value, tag) {
   return withWriteLock(async () => {
     const now = Date.now();
     const { allowlist } = await readState();
-    const result = L.updateEntry(allowlist, id, entryType, value, now);
+    const result = L.updateEntry(allowlist, id, entryType, value, now, tag);
     if (result.error) return { ok: false, error: result.error };
 
     await writeState({ [L.KEY_ALLOWLIST]: result.allowlist });
@@ -410,11 +427,15 @@ async function handleMessage(message, sender) {
   switch (type) {
     case "GET_STATE": {
       await reconcileTimer();
+      // Opening the popup is how the user "sees" a finished timer, so this is
+      // where the DONE badge is dismissed — before the state we hand back is
+      // read, so the response already carries acknowledged: true.
+      await acknowledgeLastSession();
       const { session, allowlist, lastSession } = await readState();
       return { ok: true, session, allowlist, lastSession };
     }
     case "START_SESSION":
-      return doStart(message.mode, message.durationMs);
+      return doStart(message.mode, message.durationMs, message.tagScope);
     case "PAUSE_SESSION":
       return doPause();
     case "RESUME_SESSION":
@@ -424,7 +445,7 @@ async function handleMessage(message, sender) {
     case "ADD_ENTRY":
       return doAddEntry(message.entryType, message.value);
     case "UPDATE_ENTRY":
-      return doUpdateEntry(message.id, message.entryType, message.value);
+      return doUpdateEntry(message.id, message.entryType, message.value, message.tag);
     case "DELETE_ENTRY":
       return doDeleteEntry(message.id);
     case "ALLOW_URL":
@@ -516,11 +537,7 @@ chrome.notifications.onClicked.addListener((id) => {
   } catch (_e) {
     /* ignore */
   }
-  try {
-    ignore(chrome.action.setBadgeText({ text: "" }));
-  } catch (_e) {
-    /* ignore */
-  }
+  ignore(acknowledgeLastSession());
 });
 
 // Every wake-up of the worker: badge + alarm resync, never a finalization.

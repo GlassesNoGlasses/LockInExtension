@@ -41,8 +41,46 @@
 
       <div class="btn-row">
         <button id="startBtn" class="btn btn--primary" type="button">Start</button>
-        <button id="pauseBtn" class="btn" type="button" hidden>Pause</button>
-        <button id="resumeBtn" class="btn btn--primary" type="button" hidden>Resume</button>
+        <div id="scopeRow" class="scope-row" role="group" aria-label="Session scope">
+          <button
+            class="dot dot--white"
+            type="button"
+            data-scope="white"
+            aria-pressed="false"
+            aria-label="Scope: white"
+            title="Only untagged sites allowed"
+          ></button>
+          <button
+            class="dot dot--red"
+            type="button"
+            data-scope="red"
+            aria-pressed="false"
+            aria-label="Scope: red"
+            title="Red-tagged + untagged sites allowed"
+          ></button>
+          <button
+            class="dot dot--green"
+            type="button"
+            data-scope="green"
+            aria-pressed="false"
+            aria-label="Scope: green"
+            title="Green-tagged + untagged sites allowed"
+          ></button>
+          <button
+            class="dot dot--blue"
+            type="button"
+            data-scope="blue"
+            aria-pressed="false"
+            aria-label="Scope: blue"
+            title="Blue-tagged + untagged sites allowed"
+          ></button>
+        </div>
+        <button id="pauseBtn" class="btn" type="button" hidden>
+          Pause<span id="pauseDot" class="btn-dot" aria-hidden="true"></span>
+        </button>
+        <button id="resumeBtn" class="btn btn--primary" type="button" hidden>
+          Resume<span id="resumeDot" class="btn-dot" aria-hidden="true"></span>
+        </button>
         <button id="stopBtn" class="btn btn--quiet" type="button" hidden>Stop</button>
       </div>
     </section>
@@ -60,13 +98,61 @@
         <input
           id="entryValue"
           type="text"
-          placeholder="youtube.com"
+          placeholder="Add or search…"
           autocomplete="off"
           spellcheck="false"
           aria-label="Domain or URL"
         />
         <button id="addBtn" class="btn btn--small" type="submit">Add</button>
       </form>
+
+      <div id="filterRow" class="filter-row" role="group" aria-label="Filter list">
+        <button
+          class="chip"
+          type="button"
+          data-type="url"
+          aria-pressed="false"
+          aria-label="Filter: URL entries"
+          title="Show only URLs"
+        >
+          URLS
+        </button>
+        <button
+          class="chip"
+          type="button"
+          data-type="domain"
+          aria-pressed="false"
+          aria-label="Filter: domain entries"
+          title="Show only domains"
+        >
+          DOM
+        </button>
+        <span class="filter-gap" aria-hidden="true"></span>
+        <button
+          class="dot dot--red"
+          type="button"
+          data-tag="red"
+          aria-pressed="false"
+          aria-label="Filter: red tag"
+          title="Show only red-tagged sites"
+        ></button>
+        <button
+          class="dot dot--green"
+          type="button"
+          data-tag="green"
+          aria-pressed="false"
+          aria-label="Filter: green tag"
+          title="Show only green-tagged sites"
+        ></button>
+        <button
+          class="dot dot--blue"
+          type="button"
+          data-tag="blue"
+          aria-pressed="false"
+          aria-label="Filter: blue tag"
+          title="Show only blue-tagged sites"
+        ></button>
+      </div>
 
       <p id="allowError" class="error" role="alert" hidden></p>
 

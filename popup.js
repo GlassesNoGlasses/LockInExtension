@@ -20,16 +20,25 @@
     sessionError: document.getElementById("sessionError"),
     startBtn: document.getElementById("startBtn"),
     pauseBtn: document.getElementById("pauseBtn"),
+    pauseDot: document.getElementById("pauseDot"),
+    resumeDot: document.getElementById("resumeDot"),
     resumeBtn: document.getElementById("resumeBtn"),
     stopBtn: document.getElementById("stopBtn"),
+    scopeRow: document.getElementById("scopeRow"),
     lastSession: document.getElementById("lastSession"),
     addForm: document.getElementById("addForm"),
     entryType: document.getElementById("entryType"),
     entryValue: document.getElementById("entryValue"),
+    filterRow: document.getElementById("filterRow"),
     allowError: document.getElementById("allowError"),
     entryList: document.getElementById("entryList"),
     emptyState: document.getElementById("emptyState"),
   };
+
+  /* The hand-written "nothing here yet" copy, kept so the "no matches" swap
+     can put it back verbatim. */
+  const EMPTY_TEXT = el.emptyState.textContent;
+  const NO_MATCH_TEXT = "No matches";
 
   const ERROR_TEXT = {
     BUILTIN: 'Domain "google.com" cannot be blocked',
@@ -54,6 +63,15 @@
   let state = { session: null, allowlist: [], lastSession: null };
   let editingId = null;
   let expiryPinged = false;
+
+  /* View state — popup-local, deliberately never persisted. `searchQuery` is
+     written ONLY by real input events on #entryValue: the field is also
+     pre-filled programmatically (prefillFromActiveTab), and that must not
+     count as a search. Never re-derive it from el.entryValue.value. */
+  let searchQuery = "";
+  let typeFilter = null;
+  let tagFilter = null;
+  let tagScope = "white";
 
   /* --- messaging --- */
 
@@ -103,7 +121,27 @@
   function render() {
     renderSession();
     renderLastSession();
+    renderFilters();
     renderAllowlist();
+  }
+
+  /* Mark exactly one member of a dot/chip group as chosen. `value` of null
+     leaves every button off. */
+  function paintGroup(buttons, attribute, value) {
+    for (const node of buttons) {
+      const on = node.dataset[attribute] === value;
+      node.classList.toggle("is-on", on);
+      node.setAttribute("aria-pressed", String(on));
+    }
+  }
+
+  function renderScope() {
+    paintGroup(el.scopeRow.querySelectorAll("button[data-scope]"), "scope", tagScope);
+  }
+
+  function renderFilters() {
+    paintGroup(el.filterRow.querySelectorAll("button[data-type]"), "type", typeFilter);
+    paintGroup(el.filterRow.querySelectorAll("button[data-tag]"), "tag", tagFilter);
   }
 
   function selectedMode() {
@@ -132,7 +170,15 @@
     el.durationRow.hidden = !(idle && selectedMode() === "timer");
 
     el.startBtn.hidden = !idle;
+    el.scopeRow.hidden = !idle;
+    renderScope();
     el.pauseBtn.hidden = !active;
+    // Pause/Resume carry the running session's scope colour (the session, not
+    // the idle picker, is the source of truth once started).
+    const sessionScope =
+      session && L.TAG_SCOPES.indexOf(session.tagScope) !== -1 ? session.tagScope : "white";
+    el.pauseDot.className = `btn-dot btn-dot--${sessionScope}`;
+    el.resumeDot.className = `btn-dot btn-dot--${sessionScope}`;
     el.resumeBtn.hidden = !paused;
     el.stopBtn.hidden = idle;
 
@@ -177,12 +223,26 @@
     el.lastSession.hidden = false;
   }
 
+  /* Search and both filter groups always apply together (AND). */
+  function visibleEntries() {
+    return L.filterEntries(state.allowlist, {
+      query: searchQuery,
+      type: typeFilter,
+      tag: tagFilter,
+    });
+  }
+
   function renderAllowlist() {
     el.entryList.textContent = "";
-    for (const entry of state.allowlist) {
+    const visible = visibleEntries();
+    for (const entry of visible) {
       el.entryList.appendChild(entry.id === editingId ? editRow(entry) : viewRow(entry));
     }
-    el.emptyState.hidden = state.allowlist.length > 0;
+
+    // Empty because there is nothing, or empty because nothing matched?
+    const empty = visible.length === 0;
+    el.emptyState.textContent = state.allowlist.length === 0 ? EMPTY_TEXT : NO_MATCH_TEXT;
+    el.emptyState.hidden = !empty;
   }
 
   function button(label, className, onClick) {
@@ -191,6 +251,20 @@
     node.className = className;
     node.textContent = label;
     node.addEventListener("click", onClick);
+    return node;
+  }
+
+  /* entry.tag comes back from storage, and older entries predate the field —
+     trust nothing but a known colour. */
+  function tagOf(entry) {
+    const tag = entry ? entry.tag : null;
+    return L.TAGS.indexOf(tag) === -1 ? null : tag;
+  }
+
+  function tagDot(color) {
+    const node = document.createElement("span");
+    node.className = `entry-dot entry-dot--${color}`;
+    node.title = `Tagged ${color}`;
     return node;
   }
 
@@ -206,11 +280,17 @@
     value.textContent = entry.value;
     value.title = entry.value;
 
+    const line = document.createElement("div");
+    line.className = "entry-line";
+    line.appendChild(value);
+    const color = tagOf(entry);
+    if (color) line.appendChild(tagDot(color));
+
     const tag = document.createElement("span");
     tag.className = "entry-tag";
     tag.textContent = entry.type;
 
-    main.append(value, tag);
+    main.append(line, tag);
 
     const actions = document.createElement("div");
     actions.className = "entry-actions";
@@ -221,6 +301,47 @@
 
     row.append(main, actions);
     return row;
+  }
+
+  /* Radio-style dot picker: None + the three colours. Owns its own selection
+     so Cancel simply discards it. */
+  function tagPicker(current) {
+    const node = document.createElement("div");
+    node.className = "tag-picker";
+
+    const label = document.createElement("span");
+    label.className = "tag-picker-label";
+    label.textContent = "Tag";
+    node.appendChild(label);
+
+    let selected = current;
+    const dots = [];
+
+    const paint = () => {
+      for (const dot of dots) {
+        const on = (dot.dataset.tag || null) === selected;
+        dot.classList.toggle("is-on", on);
+        dot.setAttribute("aria-pressed", String(on));
+      }
+    };
+
+    for (const color of [null].concat(L.TAGS)) {
+      const dot = document.createElement("button");
+      dot.type = "button";
+      dot.className = color ? `dot dot--${color}` : "dot dot--none";
+      if (color) dot.dataset.tag = color;
+      dot.setAttribute("aria-label", color ? `Tag: ${color}` : "Tag: none");
+      dot.title = color ? `Tag ${color}` : "No tag";
+      dot.addEventListener("click", () => {
+        selected = color;
+        paint();
+      });
+      dots.push(dot);
+      node.appendChild(dot);
+    }
+
+    paint();
+    return { node, value: () => selected };
   }
 
   function editRow(entry) {
@@ -247,11 +368,13 @@
 
     fields.append(type, value);
 
+    const tags = tagPicker(tagOf(entry));
+
     const error = document.createElement("p");
     error.className = "error";
     error.hidden = true;
 
-    const save = () => saveEdit(entry.id, type.value, value.value, error);
+    const save = () => saveEdit(entry.id, type.value, value.value, tags.value(), error);
     value.addEventListener("keydown", (event) => {
       if (event.key === "Enter") save();
       if (event.key === "Escape") stopEditing();
@@ -264,7 +387,7 @@
       button("Save", "btn btn--link", save)
     );
 
-    row.append(fields, error, actions);
+    row.append(fields, tags.node, error, actions);
     queueMicrotask(() => value.focus());
     return row;
   }
@@ -286,7 +409,7 @@
   async function start() {
     clearError(el.sessionError);
     const mode = selectedMode();
-    const message = { type: "START_SESSION", mode };
+    const message = { type: "START_SESSION", mode, tagScope };
 
     if (mode === "timer") {
       const parsed = L.parseDuration(el.hours.value, el.minutes.value);
@@ -335,7 +458,9 @@
       showError(el.allowError, errorText(response.error));
       return;
     }
+    // Clearing the box programmatically also clears the search it was doubling as.
     el.entryValue.value = "";
+    searchQuery = "";
     adopt(response);
   }
 
@@ -350,7 +475,7 @@
     renderAllowlist();
   }
 
-  async function saveEdit(id, entryType, rawValue, errorNode) {
+  async function saveEdit(id, entryType, rawValue, tag, errorNode) {
     clearError(errorNode);
     const value = rawValue.trim();
     if (!value) {
@@ -358,7 +483,9 @@
       return;
     }
 
-    const response = await send({ type: "UPDATE_ENTRY", id, entryType, value });
+    // `tag` is always explicit — null clears it — so a value/type edit can
+    // never quietly drop the colour.
+    const response = await send({ type: "UPDATE_ENTRY", id, entryType, value, tag });
     if (!response) return;
     if (!response.ok) {
       showError(errorNode, errorText(response.error));
@@ -399,6 +526,35 @@
   el.resumeBtn.addEventListener("click", () => transition("RESUME_SESSION"));
   el.stopBtn.addEventListener("click", () => transition("STOP_SESSION"));
   el.addForm.addEventListener("submit", addEntry);
+
+  /* The add box doubles as the search box. Only a real keystroke counts —
+     prefillFromActiveTab() must never blank the list. */
+  el.entryValue.addEventListener("input", () => {
+    searchQuery = el.entryValue.value;
+    renderAllowlist();
+  });
+
+  el.scopeRow.addEventListener("click", (event) => {
+    const button = event.target instanceof Element ? event.target.closest("[data-scope]") : null;
+    if (!button) return;
+    tagScope = button.dataset.scope;
+    renderScope();
+  });
+
+  /* One selection per group, groups independent, and clicking the live option
+     again switches that group's filter off. */
+  el.filterRow.addEventListener("click", (event) => {
+    const button =
+      event.target instanceof Element ? event.target.closest("[data-type],[data-tag]") : null;
+    if (!button) return;
+    if (button.dataset.type) {
+      typeFilter = typeFilter === button.dataset.type ? null : button.dataset.type;
+    } else {
+      tagFilter = tagFilter === button.dataset.tag ? null : button.dataset.tag;
+    }
+    renderFilters();
+    renderAllowlist();
+  });
 
   for (const radio of el.modeRow.querySelectorAll("input[name=mode]")) {
     radio.addEventListener("change", () => {
