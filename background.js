@@ -173,7 +173,7 @@ function notifyTimerDone(elapsed) {
     ignore(
       chrome.notifications.create(NOTIFICATION_ID, {
         type: "basic",
-        iconUrl: "hello_extensions.png",
+        iconUrl: "yippee.gif",
         title: "Lock In — time's up",
         message: "Nice job twin, you stayed locked in for " + L.formatShort(elapsed),
         priority: 2,
