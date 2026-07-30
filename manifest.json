@@ -1,10 +1,12 @@
 {
+  "manifest_version": 3,
   "name": "Lock In",
   "description": "Lock in twin, we got this.",
   "version": "1.0",
-  "manifest_version": 3,
-  "action": {
-    "default_popup": "popup.html",
-    "default_icon": "hello_extensions.png"
-  }
+  "action": { "default_popup": "popup.html", "default_icon": "hello_extensions.png" },
+  "background": { "service_worker": "background.js" },
+  "permissions": ["storage", "alarms", "notifications"],
+  "host_permissions": ["<all_urls>"],
+  "content_scripts": [{ "matches": ["http://*/*", "https://*/*"], "js": ["lib.js", "content.js"], "run_at": "document_start", "all_frames": false }],
+  "web_accessible_resources": [{ "resources": ["modal.html", "modal.css"], "matches": ["<all_urls>"] }]
 }

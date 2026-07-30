@@ -1,0 +1,157 @@
+/* Lives inside a closed shadow root: nothing is inherited from the page,
+   so every value the modal depends on is stated here explicitly. */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+.lockin-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(8, 8, 12, 0.92);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  backdrop-filter: blur(6px) saturate(120%);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.5;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-align: left;
+  text-transform: none;
+  text-shadow: none;
+  white-space: normal;
+  direction: ltr;
+  color: #f2f2f6;
+  color-scheme: dark;
+  cursor: default;
+  -webkit-font-smoothing: antialiased;
+}
+
+.lockin-card {
+  width: 100%;
+  max-width: 520px;
+  padding: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  background: #15151d;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
+}
+
+.lockin-eyebrow {
+  margin-bottom: 14px;
+  color: #ff5c3a;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.lockin-title {
+  margin-bottom: 12px;
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  color: #ffffff;
+}
+
+.lockin-copy {
+  margin-bottom: 24px;
+  font-size: 15px;
+  line-height: 1.55;
+  color: #9c9cb0;
+}
+
+.lockin-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lockin-actions-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.lockin-btn {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 12px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 11px;
+  background: #232330;
+  color: #e6e6ee;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.lockin-btn:hover {
+  background: #2c2c3c;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.lockin-btn:active {
+  background: #1c1c28;
+}
+
+.lockin-btn:focus-visible {
+  outline: 2px solid #ff8a70;
+  outline-offset: 2px;
+}
+
+.lockin-btn--primary {
+  min-height: 52px;
+  border-color: #ff5c3a;
+  background: #ff5c3a;
+  color: #1a0a06;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.lockin-btn--primary:hover {
+  background: #ff7256;
+  border-color: #ff7256;
+}
+
+.lockin-btn--primary:active {
+  background: #ef4c2b;
+}
+
+.lockin-foot {
+  margin-top: 18px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #6f6f83;
+}
+
+@media (max-width: 600px) {
+  .lockin-card {
+    padding: 24px;
+  }
+
+  .lockin-title {
+    font-size: 23px;
+  }
+
+  .lockin-actions-row {
+    grid-template-columns: 1fr;
+  }
+}

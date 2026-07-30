@@ -1,6 +1,80 @@
-<html>
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Lock In</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
   <body>
-    <h1>Hello Extensions</h1>
+    <header class="topbar">
+      <span class="brand">Lock In</span>
+      <span id="statusPill" class="pill pill--idle">Idle</span>
+    </header>
+
+    <section id="session" class="card">
+      <div id="timeReadout" class="time">00:00:00</div>
+      <div id="timeLabel" class="time-label">Not locked in</div>
+
+      <div id="modeRow" class="mode-row" role="radiogroup" aria-label="Session mode">
+        <label class="mode">
+          <input type="radio" name="mode" value="stopwatch" checked />
+          <span>Stopwatch</span>
+        </label>
+        <label class="mode">
+          <input type="radio" name="mode" value="timer" />
+          <span>Timer</span>
+        </label>
+      </div>
+
+      <div id="durationRow" class="duration-row" hidden>
+        <label class="duration">
+          <input id="hours" type="number" min="0" max="24" step="1" value="0" inputmode="numeric" aria-label="Hours" />
+          <span>hrs</span>
+        </label>
+        <label class="duration">
+          <input id="minutes" type="number" min="0" max="59" step="1" value="30" inputmode="numeric" aria-label="Minutes" />
+          <span>min</span>
+        </label>
+      </div>
+
+      <p id="sessionError" class="error" role="alert" hidden></p>
+
+      <div class="btn-row">
+        <button id="startBtn" class="btn btn--primary" type="button">Start</button>
+        <button id="pauseBtn" class="btn" type="button" hidden>Pause</button>
+        <button id="resumeBtn" class="btn btn--primary" type="button" hidden>Resume</button>
+        <button id="stopBtn" class="btn btn--quiet" type="button" hidden>Stop</button>
+      </div>
+    </section>
+
+    <p id="lastSession" class="banner" hidden></p>
+
+    <section id="allowlist" class="card">
+      <h2 class="card-title">Allowed while locked in</h2>
+
+      <form id="addForm" class="add-row">
+        <select id="entryType" aria-label="Entry type">
+          <option value="domain">Domain</option>
+          <option value="url">URL</option>
+        </select>
+        <input
+          id="entryValue"
+          type="text"
+          placeholder="youtube.com"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="Domain or URL"
+        />
+        <button id="addBtn" class="btn btn--small" type="submit">Add</button>
+      </form>
+
+      <p id="allowError" class="error" role="alert" hidden></p>
+
+      <ul id="entryList" class="entries"></ul>
+      <p id="emptyState" class="empty" hidden>Nothing allowed yet. We REALLY locked in.</p>
+    </section>
+
+    <script src="lib.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
