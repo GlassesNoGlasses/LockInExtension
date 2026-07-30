@@ -9,36 +9,44 @@
   const L = globalThis.LockInLib;
   const TICK_MS = 250;
 
+  const byId = (id) => document.getElementById(id);
+
   const el = {
-    statusPill: document.getElementById("statusPill"),
-    timeReadout: document.getElementById("timeReadout"),
-    timeLabel: document.getElementById("timeLabel"),
-    modeRow: document.getElementById("modeRow"),
-    durationRow: document.getElementById("durationRow"),
-    hours: document.getElementById("hours"),
-    minutes: document.getElementById("minutes"),
-    sessionError: document.getElementById("sessionError"),
-    startBtn: document.getElementById("startBtn"),
-    pauseBtn: document.getElementById("pauseBtn"),
-    pauseDot: document.getElementById("pauseDot"),
-    resumeDot: document.getElementById("resumeDot"),
-    resumeBtn: document.getElementById("resumeBtn"),
-    stopBtn: document.getElementById("stopBtn"),
-    scopeRow: document.getElementById("scopeRow"),
-    lastSession: document.getElementById("lastSession"),
-    addForm: document.getElementById("addForm"),
-    entryType: document.getElementById("entryType"),
-    entryValue: document.getElementById("entryValue"),
-    filterRow: document.getElementById("filterRow"),
-    allowError: document.getElementById("allowError"),
-    entryList: document.getElementById("entryList"),
-    emptyState: document.getElementById("emptyState"),
+    statusPill: byId("statusPill"),
+    timeReadout: byId("timeReadout"),
+    timeLabel: byId("timeLabel"),
+    modeRow: byId("modeRow"),
+    durationRow: byId("durationRow"),
+    hours: byId("hours"),
+    minutes: byId("minutes"),
+    sessionError: byId("sessionError"),
+    startBtn: byId("startBtn"),
+    scopeRow: byId("scopeRow"),
+    pauseBtn: byId("pauseBtn"),
+    pauseDot: byId("pauseDot"),
+    resumeBtn: byId("resumeBtn"),
+    resumeDot: byId("resumeDot"),
+    stopBtn: byId("stopBtn"),
+    lastSession: byId("lastSession"),
+    addForm: byId("addForm"),
+    entryType: byId("entryType"),
+    entryValue: byId("entryValue"),
+    filterRow: byId("filterRow"),
+    allowError: byId("allowError"),
+    entryList: byId("entryList"),
+    emptyState: byId("emptyState"),
   };
 
   /* The hand-written "nothing here yet" copy, kept so the "no matches" swap
      can put it back verbatim. */
   const EMPTY_TEXT = el.emptyState.textContent;
   const NO_MATCH_TEXT = "No matches";
+
+  const PILL_TEXT = {
+    idle: "Idle",
+    active: "Locked in",
+    paused: "Paused",
+  };
 
   const ERROR_TEXT = {
     BUILTIN: 'Domain "google.com" cannot be blocked',
@@ -90,9 +98,11 @@
   async function refresh() {
     const response = await send({ type: "GET_STATE" });
     if (!response || !response.ok) return;
-    state.session = response.session || null;
-    state.allowlist = Array.isArray(response.allowlist) ? response.allowlist : [];
-    state.lastSession = response.lastSession || null;
+    state = {
+      session: response.session || null,
+      allowlist: Array.isArray(response.allowlist) ? response.allowlist : [],
+      lastSession: response.lastSession || null,
+    };
     render();
   }
 
@@ -114,6 +124,22 @@
     }
     if (changed) render();
     else refresh();
+  }
+
+  /* Every mutation answers the same way: no reply at all means the service
+     worker is gone (stay quiet), an error reply paints `errorNode`, a good
+     reply is adopted. `onSuccess` runs before that adopt because the view
+     state it touches (editingId, searchQuery) has to be right by the time
+     adopt() re-renders. */
+  async function mutate(message, errorNode, onSuccess) {
+    const response = await send(message);
+    if (!response) return;
+    if (!response.ok) {
+      showError(errorNode, errorText(response.error));
+      return;
+    }
+    if (onSuccess) onSuccess();
+    adopt(response);
   }
 
   /* --- render --- */
@@ -161,9 +187,11 @@
     const idle = status === "idle";
     const active = status === "active";
     const paused = status === "paused";
+    // Anything that is neither idle nor active is *styled* as paused.
+    const pill = idle ? "idle" : active ? "active" : "paused";
 
-    el.statusPill.textContent = idle ? "Idle" : active ? "Locked in" : "Paused";
-    el.statusPill.className = `pill pill--${idle ? "idle" : active ? "active" : "paused"}`;
+    el.statusPill.textContent = PILL_TEXT[pill];
+    el.statusPill.className = `pill pill--${pill}`;
     el.timeLabel.textContent = statusLabel(session);
 
     el.modeRow.hidden = !idle;
@@ -173,14 +201,15 @@
     el.scopeRow.hidden = !idle;
     renderScope();
     el.pauseBtn.hidden = !active;
+    el.resumeBtn.hidden = !paused;
+    el.stopBtn.hidden = idle;
+
     // Pause/Resume carry the running session's scope colour (the session, not
     // the idle picker, is the source of truth once started).
     const sessionScope =
-      session && L.TAG_SCOPES.indexOf(session.tagScope) !== -1 ? session.tagScope : "white";
+      session && L.TAG_SCOPES.includes(session.tagScope) ? session.tagScope : "white";
     el.pauseDot.className = `btn-dot btn-dot--${sessionScope}`;
     el.resumeDot.className = `btn-dot btn-dot--${sessionScope}`;
-    el.resumeBtn.hidden = !paused;
-    el.stopBtn.hidden = idle;
 
     renderTime();
   }
@@ -223,26 +252,22 @@
     el.lastSession.hidden = false;
   }
 
-  /* Search and both filter groups always apply together (AND). */
-  function visibleEntries() {
-    return L.filterEntries(state.allowlist, {
+  function renderAllowlist() {
+    // Search and both filter groups always apply together (AND).
+    const visible = L.filterEntries(state.allowlist, {
       query: searchQuery,
       type: typeFilter,
       tag: tagFilter,
     });
-  }
 
-  function renderAllowlist() {
     el.entryList.textContent = "";
-    const visible = visibleEntries();
     for (const entry of visible) {
       el.entryList.appendChild(entry.id === editingId ? editRow(entry) : viewRow(entry));
     }
 
     // Empty because there is nothing, or empty because nothing matched?
-    const empty = visible.length === 0;
     el.emptyState.textContent = state.allowlist.length === 0 ? EMPTY_TEXT : NO_MATCH_TEXT;
-    el.emptyState.hidden = !empty;
+    el.emptyState.hidden = visible.length > 0;
   }
 
   function button(label, className, onClick) {
@@ -257,8 +282,7 @@
   /* entry.tag comes back from storage, and older entries predate the field —
      trust nothing but a known colour. */
   function tagOf(entry) {
-    const tag = entry ? entry.tag : null;
-    return L.TAGS.indexOf(tag) === -1 ? null : tag;
+    return L.TAGS.includes(entry.tag) ? entry.tag : null;
   }
 
   function tagDot(color) {
@@ -272,9 +296,6 @@
     const row = document.createElement("li");
     row.className = "entry";
 
-    const main = document.createElement("div");
-    main.className = "entry-main";
-
     const value = document.createElement("span");
     value.className = "entry-value";
     value.textContent = entry.value;
@@ -286,11 +307,13 @@
     const color = tagOf(entry);
     if (color) line.appendChild(tagDot(color));
 
-    const tag = document.createElement("span");
-    tag.className = "entry-tag";
-    tag.textContent = entry.type;
+    const type = document.createElement("span");
+    type.className = "entry-tag";
+    type.textContent = entry.type;
 
-    main.append(line, tag);
+    const main = document.createElement("div");
+    main.className = "entry-main";
+    main.append(line, type);
 
     const actions = document.createElement("div");
     actions.className = "entry-actions";
@@ -325,7 +348,7 @@
       }
     };
 
-    for (const color of [null].concat(L.TAGS)) {
+    for (const color of [null, ...L.TAGS]) {
       const dot = document.createElement("button");
       dot.type = "button";
       dot.className = color ? `dot dot--${color}` : "dot dot--none";
@@ -348,16 +371,9 @@
     const row = document.createElement("li");
     row.className = "entry entry--editing";
 
-    const fields = document.createElement("div");
-    fields.className = "entry-edit";
-
     const type = document.createElement("select");
-    for (const option of ["domain", "url"]) {
-      const node = document.createElement("option");
-      node.value = option;
-      node.textContent = option === "domain" ? "Domain" : "URL";
-      type.appendChild(node);
-    }
+    type.add(new Option("Domain", "domain"));
+    type.add(new Option("URL", "url"));
     type.value = entry.type;
 
     const value = document.createElement("input");
@@ -366,6 +382,8 @@
     value.spellcheck = false;
     value.autocomplete = "off";
 
+    const fields = document.createElement("div");
+    fields.className = "entry-edit";
     fields.append(type, value);
 
     const tags = tagPicker(tagOf(entry));
@@ -388,6 +406,7 @@
     );
 
     row.append(fields, tags.node, error, actions);
+    // Deferred: the row is not in the document until the caller appends it.
     queueMicrotask(() => value.focus());
     return row;
   }
@@ -406,7 +425,7 @@
 
   /* --- session actions --- */
 
-  async function start() {
+  function start() {
     clearError(el.sessionError);
     const mode = selectedMode();
     const message = { type: "START_SESSION", mode, tagScope };
@@ -420,29 +439,17 @@
       message.durationMs = parsed.ms;
     }
 
-    const response = await send(message);
-    if (!response) return;
-    if (!response.ok) {
-      showError(el.sessionError, errorText(response.error));
-      return;
-    }
-    adopt(response);
+    mutate(message, el.sessionError);
   }
 
-  async function transition(type) {
+  function transition(type) {
     clearError(el.sessionError);
-    const response = await send({ type });
-    if (!response) return;
-    if (!response.ok) {
-      showError(el.sessionError, errorText(response.error));
-      return;
-    }
-    adopt(response);
+    mutate({ type }, el.sessionError);
   }
 
   /* --- allowlist actions --- */
 
-  async function addEntry(event) {
+  function addEntry(event) {
     event.preventDefault();
     clearError(el.allowError);
 
@@ -452,16 +459,11 @@
       return;
     }
 
-    const response = await send({ type: "ADD_ENTRY", entryType: el.entryType.value, value });
-    if (!response) return;
-    if (!response.ok) {
-      showError(el.allowError, errorText(response.error));
-      return;
-    }
-    // Clearing the box programmatically also clears the search it was doubling as.
-    el.entryValue.value = "";
-    searchQuery = "";
-    adopt(response);
+    mutate({ type: "ADD_ENTRY", entryType: el.entryType.value, value }, el.allowError, () => {
+      // Clearing the box programmatically also clears the search it was doubling as.
+      el.entryValue.value = "";
+      searchQuery = "";
+    });
   }
 
   function startEditing(id) {
@@ -475,7 +477,7 @@
     renderAllowlist();
   }
 
-  async function saveEdit(id, entryType, rawValue, tag, errorNode) {
+  function saveEdit(id, entryType, rawValue, tag, errorNode) {
     clearError(errorNode);
     const value = rawValue.trim();
     if (!value) {
@@ -485,26 +487,16 @@
 
     // `tag` is always explicit — null clears it — so a value/type edit can
     // never quietly drop the colour.
-    const response = await send({ type: "UPDATE_ENTRY", id, entryType, value, tag });
-    if (!response) return;
-    if (!response.ok) {
-      showError(errorNode, errorText(response.error));
-      return;
-    }
-    editingId = null;
-    adopt(response);
+    mutate({ type: "UPDATE_ENTRY", id, entryType, value, tag }, errorNode, () => {
+      editingId = null;
+    });
   }
 
-  async function deleteEntry(id) {
+  function deleteEntry(id) {
     clearError(el.allowError);
-    const response = await send({ type: "DELETE_ENTRY", id });
-    if (!response) return;
-    if (!response.ok) {
-      showError(el.allowError, errorText(response.error));
-      return;
-    }
-    if (editingId === id) editingId = null;
-    adopt(response);
+    mutate({ type: "DELETE_ENTRY", id }, el.allowError, () => {
+      if (editingId === id) editingId = null;
+    });
   }
 
   /* Pre-fill the add box with the page the user is looking at right now. */
@@ -521,6 +513,11 @@
 
   /* --- wiring --- */
 
+  /* event.target can be a text node, so narrow it before closest(). */
+  function closestButton(event, selector) {
+    return event.target instanceof Element ? event.target.closest(selector) : null;
+  }
+
   el.startBtn.addEventListener("click", start);
   el.pauseBtn.addEventListener("click", () => transition("PAUSE_SESSION"));
   el.resumeBtn.addEventListener("click", () => transition("RESUME_SESSION"));
@@ -535,22 +532,21 @@
   });
 
   el.scopeRow.addEventListener("click", (event) => {
-    const button = event.target instanceof Element ? event.target.closest("[data-scope]") : null;
-    if (!button) return;
-    tagScope = button.dataset.scope;
+    const chosen = closestButton(event, "[data-scope]");
+    if (!chosen) return;
+    tagScope = chosen.dataset.scope;
     renderScope();
   });
 
   /* One selection per group, groups independent, and clicking the live option
      again switches that group's filter off. */
   el.filterRow.addEventListener("click", (event) => {
-    const button =
-      event.target instanceof Element ? event.target.closest("[data-type],[data-tag]") : null;
-    if (!button) return;
-    if (button.dataset.type) {
-      typeFilter = typeFilter === button.dataset.type ? null : button.dataset.type;
+    const chosen = closestButton(event, "[data-type],[data-tag]");
+    if (!chosen) return;
+    if (chosen.dataset.type) {
+      typeFilter = typeFilter === chosen.dataset.type ? null : chosen.dataset.type;
     } else {
-      tagFilter = tagFilter === button.dataset.tag ? null : button.dataset.tag;
+      tagFilter = tagFilter === chosen.dataset.tag ? null : chosen.dataset.tag;
     }
     renderFilters();
     renderAllowlist();
