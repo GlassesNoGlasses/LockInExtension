@@ -1,8 +1,9 @@
-/* Lock In — popup. Renders session state + allowlist CRUD.
-   All mutations go through the service worker; storage.onChanged keeps the
-   popup honest when something changes behind its back (timer expiry, a modal
-   button in some other tab). */
 
+/* popup.js - logic for `popup.html`
+ * All logic & states go through `background.js`.
+*/
+
+// startup
 (() => {
   "use strict";
 
@@ -35,8 +36,8 @@
     emptyState: document.getElementById("emptyState"),
   };
 
-  /* The hand-written "nothing here yet" copy, kept so the "no matches" swap
-     can put it back verbatim. */
+
+  // --- Default values
   const EMPTY_TEXT = el.emptyState.textContent;
   const NO_MATCH_TEXT = "No matches";
 
@@ -60,20 +61,18 @@
     browser_restart: "browser restarted",
   };
 
+  // popup states
   let state = { session: null, allowlist: [], lastSession: null };
   let editingId = null;
   let expiryPinged = false;
 
-  /* View state — popup-local, deliberately never persisted. `searchQuery` is
-     written ONLY by real input events on #entryValue: the field is also
-     pre-filled programmatically (prefillFromActiveTab), and that must not
-     count as a search. Never re-derive it from el.entryValue.value. */
+  // popup filters
   let searchQuery = "";
   let typeFilter = null;
   let tagFilter = null;
   let tagScope = "white";
 
-  /* --- messaging --- */
+  // --- Messaging
 
   async function send(message) {
     try {
@@ -87,6 +86,7 @@
     return ERROR_TEXT[code] || "Something went wrong";
   }
 
+  // re-fetches and renders the popup
   async function refresh() {
     const response = await send({ type: "GET_STATE" });
     if (!response || !response.ok) return;
@@ -96,9 +96,8 @@
     render();
   }
 
-  /* Mutations answer with the slice of state they changed; fall back to a
-     full GET_STATE if a response carries no state at all. */
-  function adopt(response) {
+  // state changes from messages on response
+  function onResponse(response) {
     let changed = false;
     if (response.session) {
       state.session = response.session;
@@ -116,8 +115,7 @@
     else refresh();
   }
 
-  /* --- render --- */
-
+  // main render function for populating .html
   function render() {
     renderSession();
     renderLastSession();
@@ -125,8 +123,7 @@
     renderAllowlist();
   }
 
-  /* Mark exactly one member of a dot/chip group as chosen. `value` of null
-     leaves every button off. */
+  // marks an element with a tag
   function paintGroup(buttons, attribute, value) {
     for (const node of buttons) {
       const on = node.dataset[attribute] === value;
@@ -173,8 +170,7 @@
     el.scopeRow.hidden = !idle;
     renderScope();
     el.pauseBtn.hidden = !active;
-    // Pause/Resume carry the running session's scope colour (the session, not
-    // the idle picker, is the source of truth once started).
+  
     const sessionScope =
       session && L.TAG_SCOPES.indexOf(session.tagScope) !== -1 ? session.tagScope : "white";
     el.pauseDot.className = `btn-dot btn-dot--${sessionScope}`;
@@ -185,7 +181,7 @@
     renderTime();
   }
 
-  /* Called by the 250 ms ticker — must not do anything but paint the clock. */
+  // updates time on clock
   function renderTime() {
     const session = state.session;
     const now = Date.now();
@@ -199,7 +195,6 @@
     if (session.mode === "timer") {
       const remaining = L.remainingMs(session, now);
       el.timeReadout.textContent = L.formatClock(remaining);
-      // Locally expired: ask the SW to reconcile, once.
       if (session.status === "active" && remaining <= 0 && !expiryPinged) {
         expiryPinged = true;
         refresh();
@@ -223,7 +218,7 @@
     el.lastSession.hidden = false;
   }
 
-  /* Search and both filter groups always apply together (AND). */
+  // filter allowed list entries
   function visibleEntries() {
     return L.filterEntries(state.allowlist, {
       query: searchQuery,
@@ -239,7 +234,6 @@
       el.entryList.appendChild(entry.id === editingId ? editRow(entry) : viewRow(entry));
     }
 
-    // Empty because there is nothing, or empty because nothing matched?
     const empty = visible.length === 0;
     el.emptyState.textContent = state.allowlist.length === 0 ? EMPTY_TEXT : NO_MATCH_TEXT;
     el.emptyState.hidden = !empty;
@@ -254,8 +248,6 @@
     return node;
   }
 
-  /* entry.tag comes back from storage, and older entries predate the field —
-     trust nothing but a known colour. */
   function tagOf(entry) {
     const tag = entry ? entry.tag : null;
     return L.TAGS.indexOf(tag) === -1 ? null : tag;
@@ -303,8 +295,6 @@
     return row;
   }
 
-  /* Radio-style dot picker: None + the three colours. Owns its own selection
-     so Cancel simply discards it. */
   function tagPicker(current) {
     const node = document.createElement("div");
     node.className = "tag-picker";
@@ -392,7 +382,7 @@
     return row;
   }
 
-  /* --- errors --- */
+  // --- Errors
 
   function showError(node, message) {
     node.textContent = message;
@@ -404,7 +394,7 @@
     node.hidden = true;
   }
 
-  /* --- session actions --- */
+  // --- Session
 
   async function start() {
     clearError(el.sessionError);
@@ -426,7 +416,7 @@
       showError(el.sessionError, errorText(response.error));
       return;
     }
-    adopt(response);
+    onResponse(response);
   }
 
   async function transition(type) {
@@ -437,10 +427,10 @@
       showError(el.sessionError, errorText(response.error));
       return;
     }
-    adopt(response);
+    onResponse(response);
   }
 
-  /* --- allowlist actions --- */
+  // --- Allowlist
 
   async function addEntry(event) {
     event.preventDefault();
@@ -458,10 +448,9 @@
       showError(el.allowError, errorText(response.error));
       return;
     }
-    // Clearing the box programmatically also clears the search it was doubling as.
     el.entryValue.value = "";
     searchQuery = "";
-    adopt(response);
+    onResponse(response);
   }
 
   function startEditing(id) {
@@ -483,8 +472,6 @@
       return;
     }
 
-    // `tag` is always explicit — null clears it — so a value/type edit can
-    // never quietly drop the colour.
     const response = await send({ type: "UPDATE_ENTRY", id, entryType, value, tag });
     if (!response) return;
     if (!response.ok) {
@@ -492,7 +479,7 @@
       return;
     }
     editingId = null;
-    adopt(response);
+    onResponse(response);
   }
 
   async function deleteEntry(id) {
@@ -504,10 +491,9 @@
       return;
     }
     if (editingId === id) editingId = null;
-    adopt(response);
+    onResponse(response);
   }
 
-  /* Pre-fill the add box with the page the user is looking at right now. */
   async function prefillFromActiveTab() {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -515,11 +501,11 @@
         el.entryValue.value = tab.url;
       }
     } catch {
-      /* no active tab or no access — leave the field empty */
+      console.error("Failed to prefill URL in popup")
     }
   }
 
-  /* --- wiring --- */
+  // --- Listeners (yay)
 
   el.startBtn.addEventListener("click", start);
   el.pauseBtn.addEventListener("click", () => transition("PAUSE_SESSION"));
@@ -527,8 +513,6 @@
   el.stopBtn.addEventListener("click", () => transition("STOP_SESSION"));
   el.addForm.addEventListener("submit", addEntry);
 
-  /* The add box doubles as the search box. Only a real keystroke counts —
-     prefillFromActiveTab() must never blank the list. */
   el.entryValue.addEventListener("input", () => {
     searchQuery = el.entryValue.value;
     renderAllowlist();
@@ -541,8 +525,6 @@
     renderScope();
   });
 
-  /* One selection per group, groups independent, and clicking the live option
-     again switches that group's filter off. */
   el.filterRow.addEventListener("click", (event) => {
     const button =
       event.target instanceof Element ? event.target.closest("[data-type],[data-tag]") : null;

@@ -1,34 +1,30 @@
 "use strict";
 
 /**
- * background.js — the Lock In service worker.
+ * background.js — main service worker.
  *
- * Invariants:
- *  - This is the ONLY writer of session state. Everything lives in
- *    chrome.storage.local; there is no mutable module-scope session state,
- *    because the worker can be evicted between any two events.
- *  - Elapsed time is always derived from stored timestamps (lib.js), never
- *    from setInterval.
- *  - Every state mutation runs inside withWriteLock() so concurrent messages
- *    cannot interleave a read-modify-write.
+ * Performs:
+ * - ONLY writer of session state in chrome.storage.local. No other sessions stored.
+ * - Elapsed time is always derived from stored timestamps (lib.js).
+ * - Every state mutation runs inside withWriteLock() for concurrency.
  */
 
 importScripts("lib.js");
-
 const L = globalThis.LockInLib;
 
 const NOTIFICATION_ID = "lockin-timer-done";
 const TAB_RECHECK_MS = 750; // second sample for the all-tabs-closed check
-const HEARTBEAT_THROTTLE_MS = 5000;
+const HEARTBEAT_THROTTLE_MS = 5000; // 5 seconds
 
-const BADGE = {
+const BADGE = { // badge states + color
   active: { text: "ON", color: "#1e8e3e" },
   paused: { text: "II", color: "#f9ab00" },
   done: { text: "DONE", color: "#1a73e8" },
 };
 
-// --- Small helpers ---------------------------------------------------------
+// --- Helpers
 
+// ignore chrome async function return values when not needed
 function ignore(maybePromise) {
   if (maybePromise && typeof maybePromise.catch === "function") {
     maybePromise.catch(() => {});
@@ -40,9 +36,9 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// --- Storage ---------------------------------------------------------------
+// --- Storage
 
-function coerceStoredSession(raw) {
+function parseStorageSession(raw) {
   if (
     raw &&
     typeof raw === "object" &&
@@ -53,6 +49,7 @@ function coerceStoredSession(raw) {
   return L.idleSession();
 }
 
+// fetches current session, allows, last session, and heartbeat health from local storage
 async function readState() {
   let data = {};
   try {
@@ -62,30 +59,27 @@ async function readState() {
       L.KEY_LAST,
       L.KEY_HEARTBEAT,
     ]);
-  } catch (_e) {
+  } catch (e) {
     data = {};
   }
   return {
-    session: coerceStoredSession(data[L.KEY_SESSION]),
+    session: parseStorageSession(data[L.KEY_SESSION]),
     allowlist: Array.isArray(data[L.KEY_ALLOWLIST]) ? data[L.KEY_ALLOWLIST] : [],
     lastSession: data[L.KEY_LAST] || null,
     heartbeat: data[L.KEY_HEARTBEAT] || null,
   };
 }
 
+// writes to local storage
 async function writeState(patch) {
   try {
     await chrome.storage.local.set(patch);
-  } catch (_e) {
-    /* storage unavailable — nothing useful to do in a worker */
+  } catch (e) {
+    console.error("Failed writing to storage: ", e)
   }
 }
 
-/**
- * Heartbeat: "the browser was alive at this instant". Written to its own key
- * so popup/content onChanged listeners can ignore it, and used to date the
- * end of a stopwatch that died with the browser.
- */
+// rate limit heartbeat of timer/stopwatch (last state recorded)
 let lastTouchAt = 0;
 function touch(now, force) {
   const stamp = typeof now === "number" ? now : Date.now();
@@ -94,13 +88,15 @@ function touch(now, force) {
   return writeState({ [L.KEY_HEARTBEAT]: { lastSeenAt: stamp } });
 }
 
-// --- Write lock ------------------------------------------------------------
+// --- Write lock
 
 let writeChain = Promise.resolve();
 
-/** Serializes read-modify-write tasks. Returns the task's own result. */
+// acquire write lock to storage
 function withWriteLock(task) {
+  // call task
   const result = writeChain.then(() => task());
+  // on complete reset lock
   writeChain = result.then(
     () => undefined,
     () => undefined
@@ -108,8 +104,9 @@ function withWriteLock(task) {
   return result;
 }
 
-// --- Badge / alarm / notification ------------------------------------------
+// --- Badge / alarm / notification
 
+// update badge
 async function syncBadge() {
   const { session, lastSession } = await readState();
   let badge = null;
@@ -126,17 +123,12 @@ async function syncBadge() {
     }
     await chrome.action.setBadgeText({ text: badge.text });
     await chrome.action.setBadgeBackgroundColor({ color: badge.color });
-  } catch (_e) {
-    /* action API unavailable (e.g. during shutdown) */
+  } catch (e) {
+    console.error("Failed to sync badge: ", e)
   }
 }
 
-/**
- * Marks the "timer finished" record as seen, which is what clears the DONE
- * badge. Persisted (rather than just calling setBadgeText("")) so a later
- * syncBadge() on a worker wake-up cannot resurrect a dismissed badge.
- * No-op unless there is an unacknowledged expiry to acknowledge.
- */
+// timer finished callback function; lock -> write lastSession state -> badge update
 function acknowledgeLastSession() {
   return withWriteLock(async () => {
     const { lastSession } = await readState();
@@ -149,25 +141,24 @@ function acknowledgeLastSession() {
 async function clearTimerAlarm() {
   try {
     await chrome.alarms.clear(L.ALARM_TIMER_END);
-  } catch (_e) {
-    /* ignore */
+  } catch (e) {
+    console.error("Failed to clear timer alarm: ", e)
   }
 }
 
-/** Arms (or clears) the expiry alarm to match the session. */
+// (re)computes chrome alarm for timer option
 async function armTimerAlarm(session) {
   await clearTimerAlarm();
   const endsAt = L.computeEndsAt(session);
   if (endsAt === null) return;
   try {
-    // A `when` in the past fires immediately, which is exactly what we want
-    // after the worker was evicted past a timer's end.
     await chrome.alarms.create(L.ALARM_TIMER_END, { when: endsAt });
-  } catch (_e) {
-    /* ignore */
+  } catch (e) {
+    console.error("Failed to create alarm for Timer option: ", e)
   }
 }
 
+// timer option done
 function notifyTimerDone(elapsed) {
   try {
     ignore(
@@ -180,17 +171,14 @@ function notifyTimerDone(elapsed) {
         requireInteraction: true,
       })
     );
-  } catch (_e) {
-    /* notifications can be disabled by the OS */
+  } catch (e) {
+    console.error("Failed to create notification: Timer Done")
   }
 }
 
-// --- Transitions (all callers must hold the write lock) --------------------
+// --- Timer/Stopwatch transitions (all callers must hold the write lock)
 
-/**
- * Ends `session` at `endedAt`, writes the LastSession record, clears the
- * alarm and resyncs the badge. Caller holds the write lock.
- */
+// finalizes session state and writes to storage; write lock must be acquired
 async function finalize(session, endedAt, reason, notify) {
   const result = L.stopSession(session, endedAt, reason);
   if (result.error) return { ok: false, error: result.error };
@@ -205,7 +193,8 @@ async function finalize(session, endedAt, reason, notify) {
   return { ok: true, session: result.session, lastSession: result.lastSession };
 }
 
-function doStart(mode, durationMs, tagScope) {
+// starts a new session; acquires storage write lock
+function start(mode, durationMs, tagScope) {
   return withWriteLock(async () => {
     const now = Date.now();
     const { session } = await readState();
@@ -220,6 +209,7 @@ function doStart(mode, durationMs, tagScope) {
   });
 }
 
+// pauses an active session; acquires write lock
 function doPause() {
   return withWriteLock(async () => {
     const now = Date.now();
@@ -234,6 +224,7 @@ function doPause() {
   });
 }
 
+// resumes a paused session; acquires write lock
 function doResume() {
   return withWriteLock(async () => {
     const now = Date.now();
@@ -249,6 +240,7 @@ function doResume() {
   });
 }
 
+// stops a session and resets; acquires write lock -> finalize
 function doStop() {
   return withWriteLock(async () => {
     const now = Date.now();
@@ -257,8 +249,9 @@ function doStop() {
   });
 }
 
-// --- Allowlist mutations ---------------------------------------------------
+// --- Allowlist functions (write lock must be acquired)
 
+// adds a new URL/DOM to allowlist; acquires write lock
 function doAddEntry(entryType, value) {
   return withWriteLock(async () => {
     const now = Date.now();
@@ -271,8 +264,8 @@ function doAddEntry(entryType, value) {
   });
 }
 
-/** ALLOW_URL / ALLOW_DOMAIN from the modal: idempotent, duplicates are fine. */
-function doAllow(entryType, url) {
+// adds URL/DOM from "ALLOW" in modal; acquires write lock
+function modalAllowEntry(entryType, url) {
   return withWriteLock(async () => {
     const now = Date.now();
     const { allowlist } = await readState();
@@ -287,6 +280,7 @@ function doAllow(entryType, url) {
   });
 }
 
+// updates a URL/DOM from allowList; acquires write lock
 function doUpdateEntry(id, entryType, value, tag) {
   return withWriteLock(async () => {
     const now = Date.now();
@@ -299,6 +293,7 @@ function doUpdateEntry(id, entryType, value, tag) {
   });
 }
 
+// deletes a URL/DOM from allowList; acquires write lock
 function doDeleteEntry(id) {
   return withWriteLock(async () => {
     const { allowlist } = await readState();
@@ -310,23 +305,22 @@ function doDeleteEntry(id) {
   });
 }
 
+// modal "You Right" option to programatically close tab
 async function doCloseTab(sender) {
   const tabId = sender && sender.tab ? sender.tab.id : undefined;
   if (typeof tabId !== "number") return { ok: false, error: "NO_TAB" };
   try {
     await chrome.tabs.remove(tabId);
     return { ok: true };
-  } catch (_e) {
+  } catch (e) {
     return { ok: false, error: "NO_TAB" };
   }
 }
 
-// --- Reconcilers -----------------------------------------------------------
+// --- Reconcilers - because service worker interruptions & actual states needed.
+// Write locks acquired; can be called everywhere
 
-/**
- * Finalizes an expired timer (with notification) or re-arms the alarm if the
- * timer is still running. Safe to call from anywhere, any number of times.
- */
+// re-derives timer, timer alarm, and finalization of timer
 function reconcileTimer() {
   return withWriteLock(async () => {
     const now = Date.now();
@@ -343,13 +337,7 @@ function reconcileTimer() {
   });
 }
 
-/**
- * onStartup only — the one place allowed to finalize a stale session.
- *  - active stopwatch  -> ended at the last heartbeat, reason "browser_restart"
- *  - expired timer     -> finalized at its end time + late notification
- *  - unexpired timer   -> keeps running, alarm re-armed
- *  - paused session    -> untouched
- */
+// onStartup, checks and updates prior states + timers
 function reconcileOnBoot() {
   return withWriteLock(async () => {
     const now = Date.now();
@@ -381,15 +369,13 @@ async function countTabs() {
   try {
     const tabs = await chrome.tabs.query({});
     return Array.isArray(tabs) ? tabs.length : -1;
-  } catch (_e) {
+  } catch (e) {
     return -1; // unknown: never treat an error as "no tabs left"
   }
 }
 
-/**
- * Ends an active stopwatch once every tab is gone. Double-sampled ~750 ms
- * apart so dragging the last tab into a new window does not end the session.
- */
+// for stopwatch ONLY; checks all tabs are closed and turns off stopwatch
+// double counts for last tab drag
 async function checkAllTabsClosed() {
   if ((await countTabs()) !== 0) return;
   await sleep(TAB_RECHECK_MS);
@@ -403,11 +389,7 @@ async function checkAllTabsClosed() {
   });
 }
 
-/**
- * Runs on every worker wake-up. Resyncs the badge and the alarm ONLY — it
- * must never finalize anything, because a wake-up says nothing about how
- * long the worker was asleep.
- */
+// runs on service worker init; resyncs badge + alarm
 async function initOnWake() {
   try {
     const { session } = await readState();
@@ -415,27 +397,23 @@ async function initOnWake() {
       await armTimerAlarm(session);
     }
     await syncBadge();
-  } catch (_e) {
-    /* ignore */
+  } catch (e) {
+    console.error("Service Worker Init: ", e)
   }
 }
 
-// --- Message router --------------------------------------------------------
-
+// --- Message routing
 async function handleMessage(message, sender) {
   const type = message && message.type;
   switch (type) {
     case "GET_STATE": {
       await reconcileTimer();
-      // Opening the popup is how the user "sees" a finished timer, so this is
-      // where the DONE badge is dismissed — before the state we hand back is
-      // read, so the response already carries acknowledged: true.
       await acknowledgeLastSession();
       const { session, allowlist, lastSession } = await readState();
       return { ok: true, session, allowlist, lastSession };
     }
     case "START_SESSION":
-      return doStart(message.mode, message.durationMs, message.tagScope);
+      return start(message.mode, message.durationMs, message.tagScope);
     case "PAUSE_SESSION":
       return doPause();
     case "RESUME_SESSION":
@@ -449,9 +427,9 @@ async function handleMessage(message, sender) {
     case "DELETE_ENTRY":
       return doDeleteEntry(message.id);
     case "ALLOW_URL":
-      return doAllow("url", message.url);
+      return modalAllowEntry("url", message.url);
     case "ALLOW_DOMAIN":
-      return doAllow("domain", message.url);
+      return modalAllowEntry("domain", message.url);
     case "CLOSE_TAB":
       return doCloseTab(sender);
     default:
@@ -459,8 +437,7 @@ async function handleMessage(message, sender) {
   }
 }
 
-// --- Listeners -------------------------------------------------------------
-
+// --- Listeners
 chrome.runtime.onInstalled.addListener(() => {
   ignore(
     withWriteLock(async () => {
@@ -472,7 +449,7 @@ chrome.runtime.onInstalled.addListener(() => {
           L.KEY_LAST,
           L.KEY_HEARTBEAT,
         ]);
-      } catch (_e) {
+      } catch (e) {
         data = {};
       }
       const patch = {};
@@ -490,22 +467,20 @@ chrome.runtime.onStartup.addListener(() => {
   ignore(reconcileOnBoot());
 });
 
-// MV3: the listener must return `true` and call sendResponse from a .then().
-// Returning a Promise from the listener silently drops the response.
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handleMessage(message, sender).then(
     (response) => {
       try {
         sendResponse(response || { ok: false, error: "INTERNAL" });
-      } catch (_e) {
-        /* port closed */
+      } catch (e) {
+        // port closed
       }
     },
     (error) => {
       try {
         sendResponse({ ok: false, error: "INTERNAL", detail: String((error && error.message) || error) });
-      } catch (_e) {
-        /* port closed */
+      } catch (e) {
+        // port closed
       }
     }
   );
@@ -534,11 +509,11 @@ chrome.tabs.onUpdated.addListener(() => {
 chrome.notifications.onClicked.addListener((id) => {
   try {
     ignore(chrome.notifications.clear(id));
-  } catch (_e) {
-    /* ignore */
+  } catch (e) {
+    console.error("Failed to clear notification: ", e)
   }
   ignore(acknowledgeLastSession());
 });
 
-// Every wake-up of the worker: badge + alarm resync, never a finalization.
+// every wake-up of the worker: badge + alarm resync
 ignore(initOnWake());

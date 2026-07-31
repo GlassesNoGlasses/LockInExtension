@@ -1,47 +1,35 @@
 "use strict";
 
 /**
- * lib.js — pure logic for the Lock In extension.
- *
- * Rules for this file (enforced by tests / review):
- *  - Zero extension-API usage (no `chrome` namespace at all). It is loaded by
- *    the service worker (importScripts), the popup, the content script and
- *    node:test alike.
- *  - Every function is total: junk input never throws.
- *  - No ambient clock reads; callers pass `now` so tests are deterministic.
+ * lib.js — main library for extension.
+ * Imported by `content.js`, `background.js`, and `popup.js`.
  */
 
-// --- Storage keys ----------------------------------------------------------
+// --- Storage keys 
 
 const KEY_ALLOWLIST = "lockin.allowlist";
 const KEY_SESSION = "lockin.session";
 const KEY_LAST = "lockin.lastSession";
 const KEY_HEARTBEAT = "lockin.heartbeat";
 
-// --- Session constants -----------------------------------------------------
+// --- Session constants
 
 const MIN_DURATION_MS = 60 * 1000; // 1 minute
 const MAX_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours
 const ALARM_TIMER_END = "lockin-timer-end";
 
-// --- Tags ------------------------------------------------------------------
+// --- URL/DOM Tags 
 
-/**
- * Tags an allowlist entry can carry. An entry with no tag (`null`, or the
- * field missing entirely on entries written before tags existed) is "white":
- * it counts in every session.
- */
+// white tags (null) -> all URLs/DOMs
 const TAGS = Object.freeze(["red", "green", "blue"]);
-
-/** Scopes a session can run under. "white" is the untagged, default scope. */
 const TAG_SCOPES = Object.freeze(["white", "red", "green", "blue"]);
 
-/** A usable tag, or null for absent/unknown ones. */
+// returns a tag or null
 function normalizeTag(tag) {
   return TAGS.indexOf(tag) === -1 ? null : tag;
 }
 
-/** A usable scope, defaulting to "white". */
+// returns a tag's scope, defaulting to "white" (all)
 function normalizeTagScope(tagScope) {
   return TAG_SCOPES.indexOf(tagScope) === -1 ? "white" : tagScope;
 }
@@ -55,14 +43,11 @@ const IDLE_SESSION = Object.freeze({
   tagScope: null,
 });
 
-const DEFAULT_PORTS = { "http:": "80", "https:": "443" };
+const DEFAULT_PORTS = { "http:": "80", "https:": "443" }; // for URLs
 
-// --- URL / host helpers ----------------------------------------------------
+// --- URL / host helpers
 
-/**
- * Normalize a bare hostname: lowercase, trimmed, no trailing dot, no port,
- * no leading "www.". Returns "" for anything unusable.
- */
+// normalizes a host; lowercase + trim + removing `www.`
 function normalizeHost(host) {
   if (typeof host !== "string") return "";
   let h = host.trim().toLowerCase();
@@ -76,10 +61,7 @@ function normalizeHost(host) {
   return h;
 }
 
-/**
- * Parse an http(s) URL into its normalized parts.
- * @returns {null|{scheme:string,host:string,port:string,path:string,query:string,normalized:string}}
- */
+// Parse an http(s) URL
 function parseUrl(raw) {
   if (typeof raw !== "string") return null;
   const trimmed = raw.trim();
@@ -87,7 +69,7 @@ function parseUrl(raw) {
   let u;
   try {
     u = new URL(trimmed);
-  } catch (_e) {
+  } catch (e) {
     return null;
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return null;
@@ -110,18 +92,15 @@ function parseUrl(raw) {
   return { scheme, host, port, path, query, normalized };
 }
 
-/** True when the URL is one a content script could actually run on. */
+// for content.js; returns True if website can be blocked (valid URL)
 function isBlockableUrl(raw) {
   return parseUrl(raw) !== null;
 }
 
-const HAS_SCHEME_RE = /^[a-z][a-z0-9+.\-]*:\/\//i;
-const LABEL_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const HAS_SCHEME_RE = /^[a-z][a-z0-9+.\-]*:\/\//i; // follows URL schem `://`
+const LABEL_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/; // looks like a domain
 
-/**
- * Normalize a user-supplied domain entry ("YouTube.com/feed" -> "youtube.com").
- * Returns "" when the input is not a plausible hostname.
- */
+// checks and returns the domain of any URL
 function normalizeDomainEntry(raw) {
   if (typeof raw !== "string") return "";
   const trimmed = raw.trim();
@@ -132,7 +111,7 @@ function normalizeDomainEntry(raw) {
   let u;
   try {
     u = new URL(candidate);
-  } catch (_e) {
+  } catch (e) {
     return "";
   }
   const host = normalizeHost(u.hostname);
@@ -147,10 +126,7 @@ function normalizeDomainEntry(raw) {
   return host;
 }
 
-/**
- * Normalize a user-supplied URL entry. Scheme-less input is assumed https.
- * Returns "" when the input is not a usable http(s) URL.
- */
+// checks and returns the URL of any entry
 function normalizeUrlEntry(raw) {
   if (typeof raw !== "string") return "";
   const trimmed = raw.trim();
@@ -161,11 +137,7 @@ function normalizeUrlEntry(raw) {
   return parsed ? parsed.normalized : "";
 }
 
-/**
- * True when `host` is `domain` or a subdomain of it. Both sides are
- * normalized first, so "www.youtube.com" matches "youtube.com" but
- * "youtube.com.evil.com" and "notyoutube.com" do not.
- */
+// returns if a host URL matches a domain
 function hostMatchesDomain(host, domain) {
   const h = normalizeHost(host);
   const d = normalizeHost(domain);
@@ -173,24 +145,10 @@ function hostMatchesDomain(host, domain) {
   return h === d || h.endsWith("." + d);
 }
 
-/**
- * Domains that are always allowed (with subdomains). They live here rather
- * than in storage, so they are never listed in the popup and cannot be
- * edited or deleted.
- */
+// domains that are always allowed
 const BUILTIN_DOMAINS = Object.freeze(["google.com"]);
 
-/**
- * True when `raw` is permitted by a built-in domain or the allowlist.
- * Non-http(s) URLs are never "allowed" — callers gate on isBlockableUrl()
- * first.
- *
- * `tagScope` is the running session's scope (default/invalid -> "white"). An
- * entry only counts when it is untagged or carries exactly that tag, so a
- * "red" session sees red + untagged entries and a "white" session sees only
- * untagged ones. Built-in domains ignore the scope entirely. An entry with an
- * unrecognizable tag counts in no scope at all (fail closed).
- */
+// checks if a URL is allowed and fits the start tag
 function isUrlAllowed(raw, allowlist, tagScope) {
   const parsed = parseUrl(raw);
   if (!parsed) return false;
@@ -213,17 +171,13 @@ function isUrlAllowed(raw, allowlist, tagScope) {
   return false;
 }
 
-// --- Allowlist CRUD --------------------------------------------------------
+// --- Allowlist CRUD
 
 let idCounter = 0;
 
 function generateId() {
-  try {
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-      return crypto.randomUUID();
-    }
-  } catch (_e) {
-    /* fall through */
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID(); // use crypto where possible
   }
   idCounter += 1;
   return "e" + idCounter + "-" + Math.random().toString(36).slice(2);
@@ -231,15 +185,11 @@ function generateId() {
 
 function normalizeEntryValue(type, rawValue) {
   if (type === "domain") return normalizeDomainEntry(rawValue);
-  if (type === "url") return normalizeUrlEntry(rawValue);
+  else if (type === "url") return normalizeUrlEntry(rawValue);
   return "";
 }
 
-/**
- * True when a normalized entry value falls under a built-in domain. Such
- * entries are rejected: they would only duplicate (visibly) what the
- * built-in already allows invisibly.
- */
+// returns True if a URL matches a built-in domain; we reject
 function matchesBuiltinDomain(type, value) {
   const host = type === "domain" ? value : (parseUrl(value) || {}).host;
   if (!host) return false;
@@ -250,10 +200,7 @@ function asList(allowlist) {
   return Array.isArray(allowlist) ? allowlist : [];
 }
 
-/**
- * Build a normalized Entry. New entries are always untagged; tags are applied
- * later via updateEntry. @returns {{entry:object|null, error:string|null}}
- */
+// returns a new allowList entry
 function makeEntry(type, rawValue, now, id) {
   const value = normalizeEntryValue(type, rawValue);
   if (!value) return { entry: null, error: "INVALID_VALUE" };
@@ -281,10 +228,7 @@ function findDuplicate(list, type, value, exceptId) {
   );
 }
 
-/**
- * @returns {{allowlist:object[], entry:object|null, error:string|null}}
- * On error the allowlist is returned unchanged.
- */
+// adds a new entry to allowList
 function addEntry(allowlist, type, rawValue, now, id) {
   const list = asList(allowlist);
   const made = makeEntry(type, rawValue, now, id);
@@ -295,12 +239,7 @@ function addEntry(allowlist, type, rawValue, now, id) {
   return { allowlist: list.concat([made.entry]), entry: made.entry, error: null };
 }
 
-/**
- * `tag` is optional: omit it (undefined) to keep the entry's current tag, pass
- * null to clear it, or pass a member of TAGS to set it. Anything else is an
- * INVALID_VALUE, checked before the value so the tag can never be half-applied.
- * @returns {{allowlist:object[], entry:object|null, error:string|null}}
- */
+// updates an entry in allowList
 function updateEntry(allowlist, id, type, rawValue, now, tag) {
   const list = asList(allowlist);
   const index = list.findIndex((e) => e && e.id === id);
@@ -334,7 +273,7 @@ function updateEntry(allowlist, id, type, rawValue, now, tag) {
   return { allowlist: next, entry, error: null };
 }
 
-/** @returns {{allowlist:object[], error:string|null}} */
+// deletes an entry in allowList
 function deleteEntry(allowlist, id) {
   const list = asList(allowlist);
   const index = list.findIndex((e) => e && e.id === id);
@@ -344,7 +283,7 @@ function deleteEntry(allowlist, id) {
   return { allowlist: next, error: null };
 }
 
-/** Domains first, then urls; alphabetical within each group. Never mutates. */
+// sorts the allow list by domain, then URL by chars
 function sortAllowlist(allowlist) {
   return asList(allowlist)
     .slice()
@@ -358,16 +297,7 @@ function sortAllowlist(allowlist) {
     });
 }
 
-/**
- * Display-only filtering for the popup list. `filters` is
- * `{query, type, tag}`; every field is optional and anything unusable is
- * simply ignored, so junk narrows nothing. All usable filters apply together.
- *
- * Note the asymmetry with session scopes: filtering by tag shows ONLY entries
- * carrying that exact tag, whereas a session scope also admits untagged ones.
- *
- * Never mutates; always returns a new array.
- */
+// filters allowlist entries
 function filterEntries(allowlist, filters) {
   const list = asList(allowlist);
   const f = filters && typeof filters === "object" ? filters : {};
@@ -389,7 +319,7 @@ function filterEntries(allowlist, filters) {
   });
 }
 
-// --- Session transitions ---------------------------------------------------
+// --- Session transitions (background.js)
 
 const VALID_REASONS = ["manual", "timer_expired", "all_tabs_closed", "browser_restart"];
 
@@ -397,7 +327,7 @@ function num(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-/** A fresh, mutable copy of the idle session. */
+// returns the idle session
 function idleSession() {
   return {
     status: "idle",
@@ -409,8 +339,8 @@ function idleSession() {
   };
 }
 
-/** Returns the session if it is structurally usable, otherwise a fresh idle one. */
-function coerceSession(session) {
+// returns the session if it is structurally usable, otherwise a fresh idle one
+function verifySession(session) {
   if (
     session &&
     typeof session === "object" &&
@@ -430,9 +360,9 @@ function isValidDuration(durationMs) {
   );
 }
 
-/** Milliseconds of focus banked so far. Frozen while paused. */
+// milliseconds of session banked so far
 function elapsedMs(session, now) {
-  const s = coerceSession(session);
+  const s = verifySession(session);
   const banked = Math.max(0, num(s.accumulatedMs, 0));
   if (s.status !== "active") return banked;
   const startedAt = num(s.startedAt, null);
@@ -440,18 +370,18 @@ function elapsedMs(session, now) {
   return banked + Math.max(0, num(now, startedAt) - startedAt);
 }
 
-/** Milliseconds left on a timer, clamped at 0. null when there is no timer. */
+// milliseconds left on a timer, clamped at 0. Returns null if not timer
 function remainingMs(session, now) {
-  const s = coerceSession(session);
+  const s = verifySession(session);
   if (s.mode !== "timer") return null;
   const duration = num(s.durationMs, null);
   if (duration === null) return null;
   return Math.max(0, duration - elapsedMs(s, now));
 }
 
-/** Wall-clock instant an actively running timer will fire. null otherwise. */
+// returns when a timer should end
 function computeEndsAt(session) {
-  const s = coerceSession(session);
+  const s = verifySession(session);
   if (s.status !== "active" || s.mode !== "timer") return null;
   const duration = num(s.durationMs, null);
   const startedAt = num(s.startedAt, null);
@@ -459,27 +389,23 @@ function computeEndsAt(session) {
   return startedAt + Math.max(0, duration - Math.max(0, num(s.accumulatedMs, 0)));
 }
 
-/** True when a running timer has reached its duration. */
+// returns True when a running timer has reached its duration
 function isExpired(session, now) {
-  const s = coerceSession(session);
+  const s = verifySession(session);
   if (s.status !== "active" || s.mode !== "timer") return false;
   const duration = num(s.durationMs, null);
   if (duration === null) return false;
   return elapsedMs(s, now) >= duration;
 }
 
-/** The one question the content script asks: should pages be blocked? */
+// content.js check if a URL should be blocked
 function isBlockingActive(session) {
   return !!session && typeof session === "object" && session.status === "active";
 }
 
-/**
- * idle -> active. An unusable `tagScope` falls back to "white" rather than
- * failing the start.
- * @returns {{session:object, error:string|null}}
- */
+// returns a new session, with default values (tag = white)
 function startSession(session, now, mode, durationMs, tagScope) {
-  const s = coerceSession(session);
+  const s = verifySession(session);
   if (s.status !== "idle") return { session: s, error: "ILLEGAL_TRANSITION" };
   if (mode !== "stopwatch" && mode !== "timer") return { session: s, error: "INVALID_VALUE" };
   if (mode === "timer" && !isValidDuration(durationMs)) {
@@ -498,9 +424,9 @@ function startSession(session, now, mode, durationMs, tagScope) {
   };
 }
 
-/** active -> paused (banks the open leg). */
+// active -> paused
 function pauseSession(session, now) {
-  const s = coerceSession(session);
+  const s = verifySession(session);
   if (s.status !== "active") return { session: s, error: "ILLEGAL_TRANSITION" };
   return {
     session: {
@@ -515,9 +441,9 @@ function pauseSession(session, now) {
   };
 }
 
-/** paused -> active (opens a new leg). */
+// paused -> active
 function resumeSession(session, now) {
-  const s = coerceSession(session);
+  const s = verifySession(session);
   if (s.status !== "paused") return { session: s, error: "ILLEGAL_TRANSITION" };
   return {
     session: {
@@ -532,12 +458,9 @@ function resumeSession(session, now) {
   };
 }
 
-/**
- * active|paused -> idle, producing the LastSession record.
- * @returns {{session:object, lastSession:object|null, error:string|null}}
- */
+// stops and ends a session
 function stopSession(session, now, reason) {
-  const s = coerceSession(session);
+  const s = verifySession(session);
   if (s.status === "idle") {
     return { session: s, lastSession: null, error: "ILLEGAL_TRANSITION" };
   }
@@ -556,7 +479,7 @@ function stopSession(session, now, reason) {
   };
 }
 
-// --- Duration --------------------------------------------------------------
+// --- Duration
 
 function toWholeNumber(input) {
   if (input === null || input === undefined || input === "") return 0;
@@ -571,10 +494,7 @@ function toWholeNumber(input) {
   return Number.isFinite(n) ? n : null;
 }
 
-/**
- * Turn an (hours, minutes) pair into a duration in ms.
- * @returns {{ms:number|null, error:null|"INVALID"|"TOO_SHORT"|"TOO_LONG"}}
- */
+// converts hours + minutes to miliseconds
 function parseDuration(hours, minutes) {
   const h = toWholeNumber(hours);
   const m = toWholeNumber(minutes);
@@ -585,18 +505,18 @@ function parseDuration(hours, minutes) {
   return { ms, error: null };
 }
 
-// --- Formatting ------------------------------------------------------------
+// --- Formatting
 
-function clampMs(ms) {
+function clampMs(ms) { // clamp ms to min(0)
   const n = num(ms, 0);
   return n > 0 ? n : 0;
 }
 
-function pad2(n) {
+function pad2(n) { // pad for display
   return n < 10 ? "0" + n : String(n);
 }
 
-/** "HH:MM:SS" for the popup clock. */
+// "HH:MM:SS" for the popup clock
 function formatClock(ms) {
   const total = Math.floor(clampMs(ms) / 1000);
   const hours = Math.floor(total / 3600);
@@ -605,7 +525,7 @@ function formatClock(ms) {
   return pad2(hours) + ":" + pad2(minutes) + ":" + pad2(seconds);
 }
 
-/** "2h 2m" / "1m 3s" / "45s" for notifications and summaries. */
+// "2h 2m" / "1m 3s" / "45s" for notifications and summaries
 function formatShort(ms) {
   const total = Math.floor(clampMs(ms) / 1000);
   const hours = Math.floor(total / 3600);
@@ -616,7 +536,7 @@ function formatShort(ms) {
   return seconds + "s";
 }
 
-// --- Exports ---------------------------------------------------------------
+// --- Exports -----
 
 const LockInLib = {
   KEY_ALLOWLIST,

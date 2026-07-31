@@ -1,18 +1,21 @@
-/* Lock In — content script.
-   Reads state straight out of chrome.storage and decides locally whether this
-   page should be blocked. The service worker is only ever asked to mutate. */
+/** 
+* content.js - Content Script for extension. Performs the following:
+* - Extracts the current URL of websites.
+* - Injects shadow DOM and handles `modal.html` when needed.
+*
+* Dependency: `lib.js` - `LockInLib` library.
+*/
 
 (async () => {
   "use strict";
 
-  const L = globalThis.LockInLib;
+  const L = globalThis.LockInLib; // main library
   if (!L) return;
 
-  const HOST_TAG = "lock-in-overlay";
+  const HOST_TAG = "lock-in-overlay"; // root tag of injected html
   const TICK_MS = 1000;
 
-  /* Styles forced onto the host element so page CSS (including `* { ... }`
-     rules) can never hide, shrink or reposition the overlay. */
+  /* fixed root tag styles */
   const HOST_STYLE = {
     position: "fixed",
     top: "0px",
@@ -36,8 +39,7 @@
     "z-index": "2147483647",
   };
 
-  /* Used only if modal.html / modal.css cannot be fetched, so a broken
-     resource load can never turn into a silently unblocked page. */
+  /* fallback html + css if `modal.html` fails */
   const FALLBACK_HTML = `
     <div class="lockin-backdrop">
       <div class="lockin-card" role="dialog" aria-modal="true">
@@ -77,12 +79,14 @@
   let savedOverflow = null;
   let lastHref = location.href;
 
+  // gets local files on runtime
   async function fetchResource(name) {
     const response = await fetch(chrome.runtime.getURL(name));
     if (!response.ok) throw new Error(`${name} ${response.status}`);
     return response.text();
   }
 
+  // returns html + css modals
   async function loadTemplate() {
     if (template) return template;
     try {
@@ -97,6 +101,7 @@
     return template;
   }
 
+  // get current session state object
   async function readState() {
     try {
       const data = await chrome.storage.local.get([L.KEY_SESSION, L.KEY_ALLOWLIST]);
@@ -109,6 +114,7 @@
     }
   }
 
+  // checks if webpage should be blocked
   function shouldBlock(session, allowlist, url) {
     if (!session) return false;
     return (
@@ -118,14 +124,14 @@
     );
   }
 
-  /* The single decision point. Everything else just calls this. */
-  async function evaluate() {
-    const state = await readState();
-    if (!state) return;
-    if (shouldBlock(state.session, state.allowlist, location.href)) showModal();
-    else hideModal();
+  // checks for page re-renders so modal is always attached to correct root
+  function ensureAttached() {
+    if (showing && host && !host.isConnected && document.documentElement) {
+      document.documentElement.appendChild(host);
+    }
   }
 
+  // locks scrolling of original webpage
   function lockScroll() {
     const root = document.documentElement;
     if (!root) return;
@@ -133,6 +139,7 @@
     root.style.overflow = "hidden";
   }
 
+  // unlock original webpage scroll
   function unlockScroll() {
     const root = document.documentElement;
     if (root && savedOverflow !== null) root.style.overflow = savedOverflow;
@@ -152,6 +159,23 @@
       fragment.appendChild(document.importNode(node, true));
     }
     shadow.appendChild(fragment);
+  }
+
+  function onShadowClick(event) {
+    const target = event.target;
+    const button = target instanceof Element ? target.closest("[data-action]") : null;
+    if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onAction(button.getAttribute("data-action"));
+  }
+
+  function hideModal() {
+    if (!showing) return;
+    showing = false;
+    if (host) host.remove();
+    host = null;
+    unlockScroll();
   }
 
   function showModal() {
@@ -174,31 +198,16 @@
     lockScroll();
   }
 
-  function hideModal() {
-    if (!showing) return;
-    showing = false;
-    if (host) host.remove();
-    host = null;
-    unlockScroll();
+  // main checker function
+  async function evaluate() {
+    const state = await readState();
+    if (!state) return;
+    if (shouldBlock(state.session, state.allowlist, location.href)) showModal();
+    else hideModal();
   }
 
-  /* Watchdog: some pages wipe or replace documentElement's children. */
-  function ensureAttached() {
-    if (showing && host && !host.isConnected && document.documentElement) {
-      document.documentElement.appendChild(host);
-    }
-  }
-
-  function onShadowClick(event) {
-    const target = event.target;
-    const button = target instanceof Element ? target.closest("[data-action]") : null;
-    if (!button) return;
-    event.preventDefault();
-    event.stopPropagation();
-    onAction(button.getAttribute("data-action"));
-  }
-
-  function messageFor(action) {
+  // sends message to background.js on extension config for website
+  function createMessage(action) {
     switch (action) {
       case "close-tab":
         return { type: "CLOSE_TAB" };
@@ -213,24 +222,25 @@
     }
   }
 
-  /* Buttons never touch the DOM themselves: mutate, then re-decide. */
+  // buttons sends request to background.js to modify state
   async function onAction(action) {
-    const message = messageFor(action);
+    const message = createMessage(action);
     if (!message) return;
     const response = await send(message);
-    // CLOSE_TAB legitimately never answers — the tab is gone first.
     if (response && response.ok) evaluate();
   }
 
+  // sends a message (only to background.js)
   async function send(message) {
     try {
       return await chrome.runtime.sendMessage(message);
     } catch {
-      // Extension reloaded / service worker gone: stay quiet, keep the page usable.
+      // extension reloaded / service worker gone; stay quiet, keep the page usable.
       return null;
     }
   }
 
+  // checker wrapper
   function tick() {
     if (location.href !== lastHref) {
       lastHref = location.href;
@@ -240,7 +250,8 @@
     ensureAttached();
   }
 
-  function wire() {
+  // initialize everything
+  function init() {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== "local") return;
       // Ignore everything else, notably the heartbeat key the SW writes often.
@@ -257,6 +268,6 @@
   }
 
   await loadTemplate();
-  wire();
+  init();
   evaluate();
 })();
