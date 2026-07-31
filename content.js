@@ -73,9 +73,10 @@
     .lockin-btn--primary { min-height: 52px; border-color: #ff5c3a; background: #ff5c3a; color: #1a0a06;
       font-size: 16px; font-weight: 800; }`;
 
+  /* `host` doubles as the "modal is up" flag — it is null exactly while the
+     overlay is down. */
   let template = null;
   let host = null;
-  let showing = false;
   let savedOverflow = null;
   let lastHref = location.href;
 
@@ -88,7 +89,6 @@
 
   // returns html + css modals
   async function loadTemplate() {
-    if (template) return template;
     try {
       const [html, css] = await Promise.all([
         fetchResource("modal.html"),
@@ -98,7 +98,6 @@
     } catch {
       template = { html: FALLBACK_HTML, css: FALLBACK_CSS };
     }
-    return template;
   }
 
   // get current session state object
@@ -154,36 +153,15 @@
     // DOMParser + importNode instead of innerHTML: sites with Trusted Types
     // enabled throw on any innerHTML assignment.
     const parsed = new DOMParser().parseFromString(template.html, "text/html");
-    const fragment = document.createDocumentFragment();
-    for (const node of Array.from(parsed.body.childNodes)) {
-      fragment.appendChild(document.importNode(node, true));
-    }
-    shadow.appendChild(fragment);
-  }
-
-  function onShadowClick(event) {
-    const target = event.target;
-    const button = target instanceof Element ? target.closest("[data-action]") : null;
-    if (!button) return;
-    event.preventDefault();
-    event.stopPropagation();
-    onAction(button.getAttribute("data-action"));
-  }
-
-  function hideModal() {
-    if (!showing) return;
-    showing = false;
-    if (host) host.remove();
-    host = null;
-    unlockScroll();
+    const body = document.importNode(parsed.body, true);
+    shadow.append(...body.childNodes);
   }
 
   function showModal() {
-    if (showing) {
+    if (host) {
       ensureAttached();
       return;
     }
-    showing = true;
 
     host = document.createElement(HOST_TAG);
     for (const [prop, value] of Object.entries(HOST_STYLE)) {
@@ -198,16 +176,39 @@
     lockScroll();
   }
 
-  // main checker function
-  async function evaluate() {
-    const state = await readState();
-    if (!state) return;
-    if (shouldBlock(state.session, state.allowlist, location.href)) showModal();
-    else hideModal();
+  function hideModal() {
+    if (!host) return;
+    host.remove();
+    host = null;
+    unlockScroll();
   }
 
-  // sends message to background.js on extension config for website
-  function createMessage(action) {
+  /* Watchdog: some pages wipe or replace documentElement's children. */
+  function ensureAttached() {
+    if (host && !host.isConnected && document.documentElement) {
+      document.documentElement.appendChild(host);
+    }
+  }
+
+  async function send(message) {
+    try {
+      return await chrome.runtime.sendMessage(message);
+    } catch {
+      // Extension reloaded / service worker gone: stay quiet, keep the page usable.
+      return null;
+    }
+  }
+
+  function onShadowClick(event) {
+    // event.target can be a text node, so narrow it before closest().
+    const button = event.target instanceof Element ? event.target.closest("[data-action]") : null;
+    if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onAction(button.dataset.action);
+  }
+
+  function messageFor(action) {
     switch (action) {
       case "close-tab":
         return { type: "CLOSE_TAB" };
@@ -230,17 +231,7 @@
     if (response && response.ok) evaluate();
   }
 
-  // sends a message (only to background.js)
-  async function send(message) {
-    try {
-      return await chrome.runtime.sendMessage(message);
-    } catch {
-      // extension reloaded / service worker gone; stay quiet, keep the page usable.
-      return null;
-    }
-  }
-
-  // checker wrapper
+  /* The 1 s tick doubles as the SPA URL-change poll. */
   function tick() {
     if (location.href !== lastHref) {
       lastHref = location.href;

@@ -15,6 +15,7 @@ const L = globalThis.LockInLib;
 const NOTIFICATION_ID = "lockin-timer-done";
 const TAB_RECHECK_MS = 750; // second sample for the all-tabs-closed check
 const HEARTBEAT_THROTTLE_MS = 5000; // 5 seconds
+const STATE_KEYS = [L.KEY_SESSION, L.KEY_ALLOWLIST, L.KEY_LAST, L.KEY_HEARTBEAT];
 
 const BADGE = { // badge states + color
   active: { text: "ON", color: "#1e8e3e" },
@@ -29,7 +30,6 @@ function ignore(maybePromise) {
   if (maybePromise && typeof maybePromise.catch === "function") {
     maybePromise.catch(() => {});
   }
-  return maybePromise;
 }
 
 function sleep(ms) {
@@ -53,15 +53,14 @@ function parseStorageSession(raw) {
 async function readState() {
   let data = {};
   try {
-    data = await chrome.storage.local.get([
-      L.KEY_SESSION,
-      L.KEY_ALLOWLIST,
-      L.KEY_LAST,
-      L.KEY_HEARTBEAT,
-    ]);
-  } catch (e) {
-    data = {};
+    return await chrome.storage.local.get(STATE_KEYS);
+  } catch (_e) {
+    return {};
   }
+}
+
+async function readState() {
+  const data = await readRawState();
   return {
     session: parseStorageSession(data[L.KEY_SESSION]),
     allowlist: Array.isArray(data[L.KEY_ALLOWLIST]) ? data[L.KEY_ALLOWLIST] : [],
@@ -82,10 +81,9 @@ async function writeState(patch) {
 // rate limit heartbeat of timer/stopwatch (last state recorded)
 let lastTouchAt = 0;
 function touch(now, force) {
-  const stamp = typeof now === "number" ? now : Date.now();
-  if (!force && stamp - lastTouchAt < HEARTBEAT_THROTTLE_MS) return Promise.resolve();
-  lastTouchAt = stamp;
-  return writeState({ [L.KEY_HEARTBEAT]: { lastSeenAt: stamp } });
+  if (!force && now - lastTouchAt < HEARTBEAT_THROTTLE_MS) return Promise.resolve();
+  lastTouchAt = now;
+  return writeState({ [L.KEY_HEARTBEAT]: { lastSeenAt: now } });
 }
 
 // --- Write lock
@@ -106,24 +104,25 @@ function withWriteLock(task) {
 
 // --- Badge / alarm / notification
 
+// returns True when DONE badge is not seen
+function isUnseenExpiry(lastSession) {
+  return !!lastSession && lastSession.reason === "timer_expired" && !lastSession.acknowledged;
+}
+
+function badgeFor(session, lastSession) {
+  if (session.status === "active") return BADGE.active;
+  if (session.status === "paused") return BADGE.paused;
+  return isUnseenExpiry(lastSession) ? BADGE.done : null;
+}
+
 // update badge
 async function syncBadge() {
   const { session, lastSession } = await readState();
-  let badge = null;
-  if (session.status === "active") badge = BADGE.active;
-  else if (session.status === "paused") badge = BADGE.paused;
-  else if (lastSession && lastSession.reason === "timer_expired" && !lastSession.acknowledged) {
-    badge = BADGE.done;
-  }
-
+  const badge = badgeFor(session, lastSession);
   try {
-    if (!badge) {
-      await chrome.action.setBadgeText({ text: "" });
-      return;
-    }
-    await chrome.action.setBadgeText({ text: badge.text });
-    await chrome.action.setBadgeBackgroundColor({ color: badge.color });
-  } catch (e) {
+    await chrome.action.setBadgeText({ text: badge ? badge.text : "" });
+    if (badge) await chrome.action.setBadgeBackgroundColor({ color: badge.color });
+  } catch (_e) {
     console.error("Failed to sync badge: ", e)
   }
 }
@@ -132,7 +131,7 @@ async function syncBadge() {
 function acknowledgeLastSession() {
   return withWriteLock(async () => {
     const { lastSession } = await readState();
-    if (!lastSession || lastSession.reason !== "timer_expired" || lastSession.acknowledged) return;
+    if (!isUnseenExpiry(lastSession)) return;
     await writeState({ [L.KEY_LAST]: { ...lastSession, acknowledged: true } });
     await syncBadge();
   });
@@ -179,7 +178,7 @@ function notifyTimerDone(elapsed) {
 // --- Timer/Stopwatch transitions (all callers must hold the write lock)
 
 // finalizes session state and writes to storage; write lock must be acquired
-async function finalize(session, endedAt, reason, notify) {
+async function finalize(session, endedAt, reason) {
   const result = L.stopSession(session, endedAt, reason);
   if (result.error) return { ok: false, error: result.error };
 
@@ -188,7 +187,10 @@ async function finalize(session, endedAt, reason, notify) {
     [L.KEY_LAST]: result.lastSession,
   });
   await clearTimerAlarm();
-  if (notify) notifyTimerDone(result.lastSession.elapsedMs);
+  // A finished timer is the only ending the user is notified about.
+  if (result.lastSession.reason === "timer_expired") {
+    notifyTimerDone(result.lastSession.elapsedMs);
+  }
   await syncBadge();
   return { ok: true, session: result.session, lastSession: result.lastSession };
 }
@@ -243,34 +245,19 @@ function doResume() {
 // stops a session and resets; acquires write lock -> finalize
 function doStop() {
   return withWriteLock(async () => {
-    const now = Date.now();
     const { session } = await readState();
-    return finalize(session, now, "manual", false);
+    return finalize(session, Date.now(), "manual");
   });
 }
 
 // --- Allowlist functions (write lock must be acquired)
 
 // adds a new URL/DOM to allowlist; acquires write lock
-function doAddEntry(entryType, value) {
+function doAddEntry(entryType, value, { tolerateDuplicate = false } = {}) {
   return withWriteLock(async () => {
-    const now = Date.now();
     const { allowlist } = await readState();
-    const result = L.addEntry(allowlist, entryType, value, now);
-    if (result.error) return { ok: false, error: result.error };
-
-    await writeState({ [L.KEY_ALLOWLIST]: result.allowlist });
-    return { ok: true, entry: result.entry, allowlist: result.allowlist };
-  });
-}
-
-// adds URL/DOM from "ALLOW" in modal; acquires write lock
-function modalAllowEntry(entryType, url) {
-  return withWriteLock(async () => {
-    const now = Date.now();
-    const { allowlist } = await readState();
-    const result = L.addEntry(allowlist, entryType, url, now);
-    if (result.error === "DUPLICATE") {
+    const result = L.addEntry(allowlist, entryType, value, Date.now());
+    if (result.error === "DUPLICATE" && tolerateDuplicate) {
       return { ok: true, entry: null, allowlist, duplicate: true };
     }
     if (result.error) return { ok: false, error: result.error };
@@ -283,9 +270,8 @@ function modalAllowEntry(entryType, url) {
 // updates a URL/DOM from allowList; acquires write lock
 function doUpdateEntry(id, entryType, value, tag) {
   return withWriteLock(async () => {
-    const now = Date.now();
     const { allowlist } = await readState();
-    const result = L.updateEntry(allowlist, id, entryType, value, now, tag);
+    const result = L.updateEntry(allowlist, id, entryType, value, Date.now(), tag);
     if (result.error) return { ok: false, error: result.error };
 
     await writeState({ [L.KEY_ALLOWLIST]: result.allowlist });
@@ -320,6 +306,20 @@ async function doCloseTab(sender) {
 // --- Reconcilers - because service worker interruptions & actual states needed.
 // Write locks acquired; can be called everywhere
 
+// Fills in every storage key the extension has not written yet
+function seedDefaults() {
+  return withWriteLock(async () => {
+    const data = await readRawState();
+    const patch = {};
+    if (!Array.isArray(data[L.KEY_ALLOWLIST])) patch[L.KEY_ALLOWLIST] = [];
+    if (!data[L.KEY_SESSION]) patch[L.KEY_SESSION] = L.idleSession();
+    if (!(L.KEY_LAST in data)) patch[L.KEY_LAST] = null;
+    if (!data[L.KEY_HEARTBEAT]) patch[L.KEY_HEARTBEAT] = { lastSeenAt: Date.now() };
+    if (Object.keys(patch).length > 0) await writeState(patch);
+    await syncBadge();
+  });
+}
+
 // re-derives timer, timer alarm, and finalization of timer
 function reconcileTimer() {
   return withWriteLock(async () => {
@@ -328,7 +328,7 @@ function reconcileTimer() {
 
     if (L.isExpired(session, now)) {
       const endsAt = L.computeEndsAt(session);
-      return finalize(session, endsAt === null ? now : endsAt, "timer_expired", true);
+      return finalize(session, endsAt === null ? now : endsAt, "timer_expired");
     }
     if (session.status === "active" && session.mode === "timer") {
       await armTimerAlarm(session);
@@ -347,7 +347,7 @@ function reconcileOnBoot() {
       if (session.mode === "timer") {
         const endsAt = L.computeEndsAt(session);
         if (endsAt !== null && endsAt <= now) {
-          await finalize(session, endsAt, "timer_expired", true);
+          await finalize(session, endsAt, "timer_expired");
         } else {
           await armTimerAlarm(session);
         }
@@ -356,7 +356,7 @@ function reconcileOnBoot() {
           heartbeat && typeof heartbeat.lastSeenAt === "number" ? heartbeat.lastSeenAt : now;
         const startedAt = typeof session.startedAt === "number" ? session.startedAt : 0;
         const endedAt = Math.min(now, Math.max(seenAt, startedAt));
-        await finalize(session, endedAt, "browser_restart", false);
+        await finalize(session, endedAt, "browser_restart");
       }
     }
 
@@ -382,10 +382,9 @@ async function checkAllTabsClosed() {
   if ((await countTabs()) !== 0) return;
 
   await withWriteLock(async () => {
-    const now = Date.now();
     const { session } = await readState();
     if (session.status !== "active" || session.mode !== "stopwatch") return;
-    await finalize(session, now, "all_tabs_closed", false);
+    await finalize(session, Date.now(), "all_tabs_closed");
   });
 }
 
@@ -404,8 +403,7 @@ async function initOnWake() {
 
 // --- Message routing
 async function handleMessage(message, sender) {
-  const type = message && message.type;
-  switch (type) {
+  switch (message && message.type) {
     case "GET_STATE": {
       await reconcileTimer();
       await acknowledgeLastSession();
@@ -427,9 +425,9 @@ async function handleMessage(message, sender) {
     case "DELETE_ENTRY":
       return doDeleteEntry(message.id);
     case "ALLOW_URL":
-      return modalAllowEntry("url", message.url);
+      return doAddEntry("url", message.url, { tolerateDuplicate: true });
     case "ALLOW_DOMAIN":
-      return modalAllowEntry("domain", message.url);
+      return doAddEntry("domain", message.url, { tolerateDuplicate: true });
     case "CLOSE_TAB":
       return doCloseTab(sender);
     default:
@@ -437,30 +435,15 @@ async function handleMessage(message, sender) {
   }
 }
 
-// --- Listeners
+// --- Listeners -------------------------------------------------------------
+
+function onTabOrWindowClosed() {
+  ignore(touch(Date.now(), true));
+  ignore(checkAllTabsClosed());
+}
+
 chrome.runtime.onInstalled.addListener(() => {
-  ignore(
-    withWriteLock(async () => {
-      let data = {};
-      try {
-        data = await chrome.storage.local.get([
-          L.KEY_SESSION,
-          L.KEY_ALLOWLIST,
-          L.KEY_LAST,
-          L.KEY_HEARTBEAT,
-        ]);
-      } catch (e) {
-        data = {};
-      }
-      const patch = {};
-      if (!Array.isArray(data[L.KEY_ALLOWLIST])) patch[L.KEY_ALLOWLIST] = [];
-      if (!data[L.KEY_SESSION]) patch[L.KEY_SESSION] = L.idleSession();
-      if (!(L.KEY_LAST in data)) patch[L.KEY_LAST] = null;
-      if (!data[L.KEY_HEARTBEAT]) patch[L.KEY_HEARTBEAT] = { lastSeenAt: Date.now() };
-      if (Object.keys(patch).length > 0) await writeState(patch);
-      await syncBadge();
-    })
-  );
+  ignore(seedDefaults());
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -468,21 +451,17 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  handleMessage(message, sender).then(
-    (response) => {
-      try {
-        sendResponse(response || { ok: false, error: "INTERNAL" });
-      } catch (e) {
-        // port closed
-      }
-    },
-    (error) => {
-      try {
-        sendResponse({ ok: false, error: "INTERNAL", detail: String((error && error.message) || error) });
-      } catch (e) {
-        // port closed
-      }
+  const respond = (response) => {
+    try {
+      sendResponse(response);
+    } catch (_e) {
+      /* port closed */
     }
+  };
+  handleMessage(message, sender).then(
+    (response) => respond(response || { ok: false, error: "INTERNAL" }),
+    (error) =>
+      respond({ ok: false, error: "INTERNAL", detail: String((error && error.message) || error) })
   );
   return true;
 });
@@ -492,15 +471,9 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   ignore(reconcileTimer());
 });
 
-chrome.tabs.onRemoved.addListener(() => {
-  ignore(touch(Date.now(), true));
-  ignore(checkAllTabsClosed());
-});
+chrome.tabs.onRemoved.addListener(onTabOrWindowClosed);
 
-chrome.windows.onRemoved.addListener(() => {
-  ignore(touch(Date.now(), true));
-  ignore(checkAllTabsClosed());
-});
+chrome.windows.onRemoved.addListener(onTabOrWindowClosed);
 
 chrome.tabs.onUpdated.addListener(() => {
   ignore(touch(Date.now(), false));
