@@ -1,61 +1,33 @@
 
-# Lock In Extension
+# ![lock-in](./icon32.png) Lock In Extension
+Chrome Store Status: Pending
 
-A Chrome (MV3) focus extension. Keep an allowlist of the sites you're actually
-allowed to be on, start a stopwatch or a countdown timer, and every disallowed
-page gets a full-page guilt trip until you close it, allow it, or pause.
+### This ever happen to you? 
 
-## Install (load unpacked)
+![doomscroll](https://media.tenor.com/Xm1L7-otNRwAAAAM/pengu-pudgy.gif) ... then it's 3 am.
+
+You know exactly how it goes. You open your laptop to do one thing, and 45 minutes later you're 3 YouTube videos, 5 reddit posts, 13 TikTok's deep. You need to focus. You need to Lock In.
+
+Hit "Start" and you're locked in: stopwatch if you're built different, timer if you need a deadline (1 minute to 24 hours, whatever works for you). While a session's running, every site that's not on your "allowlist" gets bodied with in bold text "You're supposed to be LOCKED IN." No scrolling past it. But there's 4 ways out:
+
+✅ "You Right": closes the tab. The correct answer.
+🧐 "Allow Webpage" / "Allow Domain": maybe you actually need this one site/domain. It gets added to your allowlist with full access.
+🙏 "Just 1 Time": pauses the whole session. You get access, but at what cost?
+
+Control what you can access by adding whole domains or single pages. Add color-tags for custom groupings when starting a session, or keep it untagged for all-inclusive. It's easy to get distracted, let's make it easier to stay on tack.
+
+🫡🫡 Lock in twin. We got this. 🫡🫡
+
+## Manual Install (load unpacked)
 
 1. Open `chrome://extensions`.
 2. Turn on **Developer mode** (top right).
 3. Click **Load unpacked** and select this repository folder.
 4. Pin the extension so the badge is visible: puzzle icon -> pin **Lock In**.
-5. Click the icon to open the popup, add a couple of allowlist entries, and
-   press **Start**.
+5. Click the icon to open the popup, add a couple of allowlist entries, and press **Start**.
 
-`google.com` and all of its subdomains (docs.google.com, mail.google.com, …)
-are always allowed. This is built into the extension (`BUILTIN_DOMAINS` in
-`lib.js`) rather than stored in the allowlist, so it does not appear in the
-popup and cannot be edited or deleted.
+`google.com` and all of its subdomains (docs.google.com, mail.google.com, …) are always allowed. This is built into the extension (`BUILTIN_DOMAINS` in `lib.js`) so you can still search in chrome.
 
-After editing any file, hit the **Reload** (circular arrow) button on the
-extension's card at `chrome://extensions`. Service-worker logs live behind the
-card's **service worker** link.
+After editing any file, hit the **Reload** (circular arrow) button on the extension's card at `chrome://extensions`. Service-worker logs live behind the card's **service worker** link.
 
-Badge states: no badge (idle), `ON` (locked in), `II` (paused), `DONE` (a timer
-just finished — click the notification to clear it).
-
-## Running the tests
-
-No dependencies and no build step; the tests use Node's built-in runner
-(Node 22+):
-
-```sh
-node --test        # or: npm test
-```
-
-`lib.js` holds all of the pure logic (URL normalization, domain matching,
-allowlist CRUD, session state machine, time math, formatting) and is covered by
-`tests/lib.test.js`. It never touches the `chrome` namespace and never reads the
-clock itself — callers pass `now` — so everything about it is deterministic.
-
-## Known limitations
-
-- **`chrome://` pages, the Chrome Web Store and other extension pages cannot be
-  blocked.** Chrome forbids content scripts there, so no modal can appear. This
-  is a platform restriction, not a bug.
-- **SPA navigation is detected within ~1 second.** In-app route changes (e.g.
-  clicking through YouTube) are caught by a 1 s poll, so the modal can lag a
-  beat behind the URL change.
-- **URL entries match their query string exactly.** `…/watch?v=abc` and
-  `…/watch?v=abc&t=30` are different entries; the fragment (`#…`) is ignored and
-  a trailing slash is normalized away. Allow the whole domain if you want
-  everything under it.
-- **System clock changes are not defended against.** Elapsed time is derived
-  from stored timestamps, so moving the clock forward or back will skew a
-  running session (values are clamped so they can never go negative).
-- **The icon is the 16 px starter PNG.** Chrome scales it up for the timer-done
-  notification, which looks soft. Drop a 128x128 PNG in and point
-  `manifest.json`'s `default_icon` plus the notification `iconUrl` in
-  `background.js` at it for a crisper result.
+Badge states: no badge (idle), `ON` (locked in), `II` (paused), `DONE` (a timer just finished — click the notification to clear it).
