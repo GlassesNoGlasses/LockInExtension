@@ -50,8 +50,7 @@ function parseStorageSession(raw) {
 }
 
 // fetches current session, allows, last session, and heartbeat health from local storage
-async function readState() {
-  let data = {};
+async function readRawState() {
   try {
     return await chrome.storage.local.get(STATE_KEYS);
   } catch (_e) {

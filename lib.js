@@ -302,7 +302,7 @@ function idleSession() {
 
 const IDLE_SESSION = Object.freeze(idleSession());
 
-function coerceSession(session) {
+function verifySession(session) {
   const usable = session && typeof session === "object" && SESSION_STATUSES.includes(session.status);
   return usable ? session : idleSession();
 }
