@@ -123,9 +123,17 @@
     );
   }
 
+  /* The single decision point. Everything else just calls this. */
+  async function evaluate() {
+    const state = await readState();
+    if (!state) return;
+    if (shouldBlock(state.session, state.allowlist, location.href)) showModal();
+    else hideModal();
+  }
+
   // checks for page re-renders so modal is always attached to correct root
   function ensureAttached() {
-    if (showing && host && !host.isConnected && document.documentElement) {
+    if (host && !host.isConnected && document.documentElement) {
       document.documentElement.appendChild(host);
     }
   }
@@ -183,13 +191,6 @@
     unlockScroll();
   }
 
-  /* Watchdog: some pages wipe or replace documentElement's children. */
-  function ensureAttached() {
-    if (host && !host.isConnected && document.documentElement) {
-      document.documentElement.appendChild(host);
-    }
-  }
-
   async function send(message) {
     try {
       return await chrome.runtime.sendMessage(message);
@@ -208,7 +209,7 @@
     onAction(button.dataset.action);
   }
 
-  function messageFor(action) {
+  function createMessage(action) {
     switch (action) {
       case "close-tab":
         return { type: "CLOSE_TAB" };

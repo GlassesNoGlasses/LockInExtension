@@ -139,7 +139,7 @@
       return;
     }
     if (onSuccess) onSuccess();
-    adopt(response);
+    onResponse(response);
   }
 
   /* --- render --- */
