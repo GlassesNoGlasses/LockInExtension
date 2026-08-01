@@ -25,7 +25,7 @@ function num(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-// --- Tags ------------------------------------------------------------------
+// --- Tags
 
 // white tags (null) -> all URLs/DOMs
 const TAGS = Object.freeze(["red", "green", "blue"]);
@@ -41,7 +41,7 @@ function normalizeTagScope(tagScope) {
   return TAG_SCOPES.includes(tagScope) ? tagScope : "white";
 }
 
-// --- URL / host helpers ----------------------------------------------------
+// --- URL / host helpers
 
 const DEFAULT_PORTS = { "http:": "80", "https:": "443" };
 const HAS_SCHEME_RE = /^[a-z][a-z0-9+.\-]*:\/\//i;
@@ -75,7 +75,7 @@ function parseUrl(raw) {
 
   const scheme = u.protocol.slice(0, -1);
   const port = u.port === DEFAULT_PORTS[u.protocol] ? "" : u.port;
-  // http(s) URLs always carry a path, so only the root keeps its slash.
+  // http(s) URLs always carry a path, so only the root keeps its slash
   const path = u.pathname.replace(/\/+$/, "") || "/";
   const query = u.search;
   const authority = port ? host + ":" + port : host;
@@ -142,7 +142,7 @@ function isUrlAllowed(raw, allowlist, tagScope) {
     if (!entry || typeof entry !== "object") return false;
     if (entry.tag != null && entry.tag !== scope) return false;
     if (entry.type === "domain") return hostMatchesDomain(parsed.host, entry.value);
-    // parsed.normalized is never "", so an unusable entry value cannot match.
+    // parsed.normalized is never "", so an unusable entry value cannot match
     if (entry.type === "url") return normalizeUrlEntry(entry.value) === parsed.normalized;
     return false;
   });
@@ -271,7 +271,7 @@ function filterEntries(allowlist, filters) {
   const query = typeof f.query === "string" ? f.query.trim().toLowerCase() : "";
   const type = f.type === "domain" || f.type === "url" ? f.type : null;
   const tag = normalizeTag(f.tag);
-  // Unfiltered means unfiltered: junk entries are only dropped when narrowing.
+  // unfiltered means unfiltered: junk entries are only dropped when narrowing
   if (!query && !type && !tag) return list.slice();
 
   return list.filter((entry) => {
@@ -423,7 +423,7 @@ function stopSession(session, now, reason) {
       elapsedMs: elapsedMs(s, now),
       endedAt: num(now, 0),
       reason: STOP_REASONS.includes(reason) ? reason : "manual",
-      // Flipped by the service worker once the user has seen the DONE badge.
+      // flipped by the service worker once the user has seen the DONE badge
       acknowledged: false,
     },
     error: null,
@@ -432,7 +432,7 @@ function stopSession(session, now, reason) {
 
 // --- Duration
 
-/** A non-negative integer; 0 for blank input, null for anything else. */
+// a non-negative integer; 0 for blank input, null for anything else
 function toWholeNumber(input) {
   if (input === null || input === undefined || input === "") return 0;
   if (typeof input === "number") {
@@ -442,7 +442,7 @@ function toWholeNumber(input) {
   const trimmed = input.trim();
   if (!trimmed) return 0;
   if (!/^\d+$/.test(trimmed)) return null;
-  // A long enough run of digits still overflows to Infinity.
+  // a long enough run of digits still overflows to Infinity
   return num(Number(trimmed), null);
 }
 
@@ -459,7 +459,7 @@ function parseDuration(hours, minutes) {
 
 // --- Formatting
 
-/** Whole hours/minutes/seconds in `ms`, clamped at zero. */
+// whole hours/minutes/seconds in `ms`, clamped at zero
 function splitDuration(ms) {
   const total = Math.floor(Math.max(0, num(ms, 0)) / 1000);
   return {
@@ -487,7 +487,7 @@ function formatShort(ms) {
   return seconds + "s";
 }
 
-// --- Exports -----
+// --- Exports
 
 const LockInLib = {
   KEY_ALLOWLIST,
