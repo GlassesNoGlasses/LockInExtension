@@ -51,7 +51,7 @@
   };
 
   const ERROR_TEXT = {
-    BUILTIN: 'Domain "google.com" cannot be blocked',
+    BUILTIN: 'Domain "google.com" is built-in',
     DUPLICATE: "Already in your list",
     INVALID_VALUE: "That doesn't look like a valid domain/URL",
     INVALID_DURATION: "Timer must be between 1 minute and 24 hours",
