@@ -121,7 +121,7 @@ async function syncBadge() {
   try {
     await chrome.action.setBadgeText({ text: badge ? badge.text : "" });
     if (badge) await chrome.action.setBadgeBackgroundColor({ color: badge.color });
-  } catch (_e) {
+  } catch (e) {
     console.error("Failed to sync badge: ", e)
   }
 }
@@ -186,7 +186,7 @@ async function finalize(session, endedAt, reason) {
     [L.KEY_LAST]: result.lastSession,
   });
   await clearTimerAlarm();
-  // A finished timer is the only ending the user is notified about.
+  // a finished timer is the only ending the user is notified about
   if (result.lastSession.reason === "timer_expired") {
     notifyTimerDone(result.lastSession.elapsedMs);
   }
@@ -305,7 +305,7 @@ async function doCloseTab(sender) {
 // --- Reconcilers - because service worker interruptions & actual states needed.
 // Write locks acquired; can be called everywhere
 
-// Fills in every storage key the extension has not written yet
+// fills in every storage key the extension has not written yet
 function seedDefaults() {
   return withWriteLock(async () => {
     const data = await readRawState();
@@ -434,7 +434,7 @@ async function handleMessage(message, sender) {
   }
 }
 
-// --- Listeners -------------------------------------------------------------
+// --- Listeners
 
 function onTabOrWindowClosed() {
   ignore(touch(Date.now(), true));
@@ -454,7 +454,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try {
       sendResponse(response);
     } catch (_e) {
-      /* port closed */
+      // port closed
     }
   };
   handleMessage(message, sender).then(

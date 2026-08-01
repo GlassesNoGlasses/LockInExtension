@@ -39,8 +39,8 @@
   };
 
 
-  /* The hand-written "nothing here yet" copy, kept so the "no matches" swap
-     can put it back verbatim. */
+  // the hand-written "nothing here yet" copy, kept so the "no matches" swap
+  // can put it back verbatim
   const EMPTY_TEXT = el.emptyState.textContent;
   const NO_MATCH_TEXT = "No matches";
 
@@ -126,11 +126,11 @@
     else refresh();
   }
 
-  /* Every mutation answers the same way: no reply at all means the service
-     worker is gone (stay quiet), an error reply paints `errorNode`, a good
-     reply is adopted. `onSuccess` runs before that adopt because the view
-     state it touches (editingId, searchQuery) has to be right by the time
-     adopt() re-renders. */
+  // every mutation answers the same way: no reply at all means the service
+  // worker is gone (stay quiet), an error reply paints `errorNode`, a good
+  // reply is adopted. `onSuccess` runs before that adopt because the view
+  // state it touches (editingId, searchQuery) has to be right by the time
+  // onResponse() re-renders
   async function mutate(message, errorNode, onSuccess) {
     const response = await send(message);
     if (!response) return;
@@ -142,7 +142,7 @@
     onResponse(response);
   }
 
-  /* --- render --- */
+  // --- Render
 
   function render() {
     renderSession();
@@ -186,7 +186,7 @@
     const idle = status === "idle";
     const active = status === "active";
     const paused = status === "paused";
-    // Anything that is neither idle nor active is *styled* as paused.
+    // anything that is neither idle nor active is *styled* as paused
     const pill = idle ? "idle" : active ? "active" : "paused";
 
     el.statusPill.textContent = PILL_TEXT[pill];
@@ -204,7 +204,7 @@
     el.stopBtn.hidden = idle;
 
     // Pause/Resume carry the running session's scope colour (the session, not
-    // the idle picker, is the source of truth once started).
+    // the idle picker, is the source of truth once started)
     const sessionScope =
       session && L.TAG_SCOPES.includes(session.tagScope) ? session.tagScope : "white";
     el.pauseDot.className = `btn-dot btn-dot--${sessionScope}`;
@@ -251,7 +251,7 @@
   }
 
   function renderAllowlist() {
-    // Search and both filter groups always apply together (AND).
+    // search and both filter groups always apply together (AND)
     const visible = L.filterEntries(state.allowlist, {
       query: searchQuery,
       type: typeFilter,
@@ -263,7 +263,7 @@
       el.entryList.appendChild(entry.id === editingId ? editRow(entry) : viewRow(entry));
     }
 
-    // Empty because there is nothing, or empty because nothing matched?
+    // empty because there is nothing, or empty because nothing matched?
     el.emptyState.textContent = state.allowlist.length === 0 ? EMPTY_TEXT : NO_MATCH_TEXT;
     el.emptyState.hidden = visible.length > 0;
   }
@@ -400,7 +400,7 @@
     );
 
     row.append(fields, tags.node, error, actions);
-    // Deferred: the row is not in the document until the caller appends it.
+    // deferred: the row is not in the document until the caller appends it
     queueMicrotask(() => value.focus());
     return row;
   }
@@ -454,7 +454,7 @@
     }
 
     mutate({ type: "ADD_ENTRY", entryType: el.entryType.value, value }, el.allowError, () => {
-      // Clearing the box programmatically also clears the search it was doubling as.
+      // clearing the box programmatically also clears the search it was doubling as
       el.entryValue.value = "";
       searchQuery = "";
     });
@@ -480,7 +480,7 @@
     }
 
     // `tag` is always explicit — null clears it — so a value/type edit can
-    // never quietly drop the colour.
+    // never quietly drop the colour
     mutate({ type: "UPDATE_ENTRY", id, entryType, value, tag }, errorNode, () => {
       editingId = null;
     });
@@ -504,9 +504,9 @@
     }
   }
 
-  /* --- wiring --- */
+  // --- Wiring
 
-  /* event.target can be a text node, so narrow it before closest(). */
+  // event.target can be a text node, so narrow it before closest()
   function closestButton(event, selector) {
     return event.target instanceof Element ? event.target.closest(selector) : null;
   }
