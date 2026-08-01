@@ -15,7 +15,7 @@
   const HOST_TAG = "lock-in-overlay"; // root tag of injected html
   const TICK_MS = 1000;
 
-  /* fixed root tag styles */
+  // fixed root tag styles
   const HOST_STYLE = {
     position: "fixed",
     top: "0px",
@@ -39,7 +39,7 @@
     "z-index": "2147483647",
   };
 
-  /* fallback html + css if `modal.html` fails */
+  // fallback html + css if `modal.html` fails
   const FALLBACK_HTML = `
     <div class="lockin-backdrop">
       <div class="lockin-card" role="dialog" aria-modal="true">
@@ -73,8 +73,8 @@
     .lockin-btn--primary { min-height: 52px; border-color: #ff5c3a; background: #ff5c3a; color: #1a0a06;
       font-size: 16px; font-weight: 800; }`;
 
-  /* `host` doubles as the "modal is up" flag — it is null exactly while the
-     overlay is down. */
+  // `host` doubles as the "modal is up" flag — it is null exactly while the
+  // overlay is down
   let template = null;
   let host = null;
   let savedOverflow = null;
@@ -123,7 +123,7 @@
     );
   }
 
-  /* The single decision point. Everything else just calls this. */
+  // the single decision point; everything else just calls this
   async function evaluate() {
     const state = await readState();
     if (!state) return;
@@ -159,7 +159,7 @@
     shadow.appendChild(style);
 
     // DOMParser + importNode instead of innerHTML: sites with Trusted Types
-    // enabled throw on any innerHTML assignment.
+    // enabled throw on any innerHTML assignment
     const parsed = new DOMParser().parseFromString(template.html, "text/html");
     const body = document.importNode(parsed.body, true);
     shadow.append(...body.childNodes);
@@ -195,13 +195,13 @@
     try {
       return await chrome.runtime.sendMessage(message);
     } catch {
-      // Extension reloaded / service worker gone: stay quiet, keep the page usable.
+      // extension reloaded / service worker gone: stay quiet, keep the page usable
       return null;
     }
   }
 
   function onShadowClick(event) {
-    // event.target can be a text node, so narrow it before closest().
+    // event.target can be a text node, so narrow it before closest()
     const button = event.target instanceof Element ? event.target.closest("[data-action]") : null;
     if (!button) return;
     event.preventDefault();
@@ -232,7 +232,7 @@
     if (response && response.ok) evaluate();
   }
 
-  /* The 1 s tick doubles as the SPA URL-change poll. */
+  // the 1s tick doubles as the SPA URL-change poll
   function tick() {
     if (location.href !== lastHref) {
       lastHref = location.href;
@@ -246,7 +246,7 @@
   function init() {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== "local") return;
-      // Ignore everything else, notably the heartbeat key the SW writes often.
+      // ignore everything else, notably the heartbeat key the SW writes often
       if (!(L.KEY_SESSION in changes) && !(L.KEY_ALLOWLIST in changes)) return;
       evaluate();
     });
