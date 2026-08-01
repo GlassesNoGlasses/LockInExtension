@@ -9,8 +9,7 @@
     "default_icon": { "16": "icon16.png", "32": "icon32.png", "48": "icon48.png", "128": "icon128.png" }
   },
   "background": { "service_worker": "background.js" },
-  "permissions": ["storage", "alarms", "notifications"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": ["storage", "alarms", "notifications", "activeTab"],
   "content_scripts": [{ "matches": ["http://*/*", "https://*/*"], "js": ["lib.js", "content.js"], "run_at": "document_start", "all_frames": false }],
   "web_accessible_resources": [{ "resources": ["modal.html", "modal.css"], "matches": ["<all_urls>"] }]
 }
