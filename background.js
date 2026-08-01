@@ -121,7 +121,7 @@ async function syncBadge() {
   try {
     await chrome.action.setBadgeText({ text: badge ? badge.text : "" });
     if (badge) await chrome.action.setBadgeBackgroundColor({ color: badge.color });
-  } catch (_e) {
+  } catch (e) {
     console.error("Failed to sync badge: ", e)
   }
 }
