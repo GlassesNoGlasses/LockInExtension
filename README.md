@@ -1,6 +1,6 @@
 
 # ![lock-in](./icon32.png) Lock In Extension
-Chrome Store Status: Pending
+[Chrome Store](https://chromewebstore.google.com/detail/ohnecmehgbckaclgpdkfojjjaifbpfmg?utm_source=item-share-cb)
 
 ### This ever happen to you? 
 
